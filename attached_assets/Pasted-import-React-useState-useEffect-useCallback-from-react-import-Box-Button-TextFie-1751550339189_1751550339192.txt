@@ -1,0 +1,802 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+    Box, Button, TextField, Typography, List, ListItem, ListItemText,
+    ListItemSecondaryAction, IconButton, Dialog, DialogTitle, DialogContent,
+    DialogActions, CircularProgress, Alert, Grid, Card, CardContent, Divider,
+    MenuItem, Select, FormControl, InputLabel, Paper
+} from '@mui/material';
+import SaveIcon from '@mui/icons-material/Save';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import DeleteIcon from '@mui/icons-material/Delete';
+import ClearIcon from '@mui/icons-material/Clear'; // Corrected import path if it was wrong
+import GppGoodIcon from '@mui/icons-material/GppGood';
+import axios from 'axios';
+import { useNavigate } from 'react-router-dom';
+import { useTheme } from '@mui/material/styles';
+
+const API_BASE_URL = 'https://priceaibback.onrender.com';
+
+// Helper function to calculate derived pricing metrics from raw snapshot data
+// IMPORTANT: This function is primarily for DISPLAYING comparison data within SnapshotManager.
+// The primary calculation logic for the main app should remain in PricingPage.jsx's calculatePrices.
+const calculateSnapshotPrices = (snapshotData) => {
+    const { total_cost, use_margin, target_profit, target_margin, use_breakdown, products, expenses } = snapshotData;
+
+    // Ensure total_cost is a number
+    const safeTotalCost = parseFloat(total_cost) || 0;
+
+    const actualCost = use_breakdown
+        ? expenses.reduce((sum, c) => sum + (parseFloat(c.amount) || 0), 0)
+        : safeTotalCost;
+
+    const totalVariableCosts = products.reduce((sum, product) => {
+        return sum + ((parseFloat(product.cost_per_unit) || 0) * (parseFloat(product.expected_units) || 0));
+    }, 0);
+
+    const overallTotalCostForRevenueCalculation = actualCost + totalVariableCosts;
+
+    let totalRevenueValue = 0;
+    let calculatedProfit = 0;
+
+    if (use_margin) {
+        const safeTargetMargin = parseFloat(target_margin) || 0;
+        if (safeTargetMargin >= 100) {
+            totalRevenueValue = 0;
+            calculatedProfit = 0;
+        } else {
+            totalRevenueValue = overallTotalCostForRevenueCalculation / (1 - safeTargetMargin / 100);
+            calculatedProfit = totalRevenueValue - overallTotalCostForRevenueCalculation;
+        }
+    } else {
+        const safeTargetProfit = parseFloat(target_profit) || 0;
+        calculatedProfit = safeTargetProfit;
+        totalRevenueValue = overallTotalCostForRevenueCalculation + safeTargetProfit;
+    }
+
+    // --- Start of Cost-Plus / Percentage specific calculation for comparison display ---
+    const percentageBasedProducts = products.filter(p => p.calculation_method === 'percentage');
+    const costPlusBasedProducts = products.filter(p => p.calculation_method === 'cost-plus');
+
+    const fixedCostAllocatedToPercentageProducts = percentageBasedProducts.reduce((sum, p) => {
+        const productExpectedRevenue = (parseFloat(p.revenue_percentage) || 0) * totalRevenueValue;
+        return sum + ((productExpectedRevenue / (totalRevenueValue || 1)) * actualCost); // Added || 1 to prevent division by zero
+    }, 0);
+
+    const fixedCostAllocatedToCostPlusProducts = actualCost - fixedCostAllocatedToPercentageProducts;
+
+    const profitFromPercentageProducts = percentageBasedProducts.reduce((sum, p) => {
+        const productExpectedRevenue = (parseFloat(p.revenue_percentage) || 0) * totalRevenueValue;
+        const productVariableCost = (parseFloat(p.cost_per_unit) || 0) * (parseFloat(p.expected_units) || 0);
+        const productAllocatedFixedCost = ((productExpectedRevenue / (totalRevenueValue || 1)) * actualCost); // Added || 1
+        return sum + (productExpectedRevenue - productVariableCost - productAllocatedFixedCost);
+    }, 0);
+
+    const profitNeededFromCostPlusProducts = calculatedProfit - profitFromPercentageProducts;
+
+    const totalExpectedUnitsCostPlus = costPlusBasedProducts.reduce((sum, p) => sum + (parseFloat(p.expected_units) || 0), 0);
+
+    const calculatedProducts = products.map((product) => {
+        const safeExpectedUnits = parseFloat(product.expected_units) > 0 ? parseFloat(product.expected_units) : 1;
+        const safeCostPerUnit = parseFloat(product.cost_per_unit) || 0;
+        const calculationMethod = product.calculation_method || 'percentage';
+
+        let price = 0; // Renamed from suggestedPrice for clarity with render
+        let percentageRevenue = 0;
+        let suggestedProfitPerUnit = 0;
+
+        if (calculationMethod === 'percentage') {
+            const safeRevenuePercentage = parseFloat(product.revenue_percentage) || 0;
+            const revenueShare = safeRevenuePercentage * totalRevenueValue;
+            price = safeExpectedUnits > 0 ? (revenueShare / safeExpectedUnits) : 0;
+            price = Math.round(price * 100) / 100;
+
+            const productRevenue = price * safeExpectedUnits;
+            const productVariableCost = safeCostPerUnit * safeExpectedUnits;
+            const productAllocatedFixedCost = (productRevenue / (totalRevenueValue || 1)) * actualCost; // Added || 1
+            const productProfit = productRevenue - productVariableCost - productAllocatedFixedCost;
+            percentageRevenue = productRevenue > 0 ? (productProfit / productRevenue) * 100 : 0;
+            suggestedProfitPerUnit = safeExpectedUnits > 0 ? productProfit / safeExpectedUnits : 0;
+
+        } else { // 'cost-plus' method
+            let profitContributionPerUnit = 0;
+            let fixedCostContributionPerUnit = 0;
+
+            if (totalExpectedUnitsCostPlus > 0) {
+                profitContributionPerUnit = profitNeededFromCostPlusProducts / totalExpectedUnitsCostPlus;
+                fixedCostContributionPerUnit = fixedCostAllocatedToCostPlusProducts / totalExpectedUnitsCostPlus;
+            } else if (costPlusBasedProducts.length === 1 && safeExpectedUnits > 0) {
+                profitContributionPerUnit = profitNeededFromCostPlusProducts / safeExpectedUnits;
+                fixedCostContributionPerUnit = fixedCostAllocatedToCostPlusProducts / safeExpectedUnits;
+            }
+
+            suggestedProfitPerUnit = profitContributionPerUnit + fixedCostContributionPerUnit;
+            price = safeCostPerUnit + suggestedProfitPerUnit;
+            price = Math.round(price * 100) / 100;
+
+            const productRevenue = price * safeExpectedUnits;
+            const productTotalCost = (safeCostPerUnit * safeExpectedUnits) + (fixedCostContributionPerUnit * safeExpectedUnits);
+            percentageRevenue = productRevenue > 0 ? ((productRevenue - productTotalCost) / productRevenue) * 100 : 0;
+        }
+
+        return {
+            name: product.name,
+            percentage: calculationMethod === 'percentage' ? (parseFloat(product.revenue_percentage) || 0) * 100 : 0,
+            expectedUnits: parseFloat(product.expected_units) || 0,
+            costPerUnit: safeCostPerUnit,
+            price: parseFloat(price) || 0, // Ensure price is a number
+            unitsNeeded: calculationMethod === 'percentage' ? (price > 0 ? Math.ceil(((parseFloat(product.revenue_percentage) || 0) * totalRevenueValue) / price) : 0) : (parseFloat(product.expected_units) || 0), // Default to expectedUnits for cost-plus
+            percentageRevenue: parseFloat(percentageRevenue) || 0,
+            calculationMethod: calculationMethod,
+            suggestedProfit: parseFloat(suggestedProfitPerUnit) || 0, // Ensure suggestedProfit is a number
+            orbital: parseFloat(product.orbital) || 0, // Ensure orbital is included and numeric
+        };
+    });
+
+    return {
+        actualCost: parseFloat(actualCost) || 0,
+        totalRevenue: parseFloat(totalRevenueValue) || 0,
+        calculatedProfit: parseFloat(calculatedProfit) || 0,
+        calculatedProducts,
+        inputs: snapshotData // Keep original inputs for display
+    };
+};
+
+const SnapshotManager = ({
+    loading,
+    setLoading,
+    setError,
+    setSuccessMessage,
+    currentPricingState,
+    onSnapshotLoaded,
+    onCalculatePrices,
+    setActiveTab,
+    onUseForQuotations
+}) => {
+    const [snapshotName, setSnapshotName] = useState('');
+    const [savedSnapshots, setSavedSnapshots] = useState([]);
+    const [openLoadDialog, setOpenLoadDialog] = useState(false);
+    const [openDeleteDialog, setOpenDeleteDialog] = useState(false);
+    const [snapshotToDelete, setSnapshotToDelete] = useState(null);
+    const [selectedQuotationSnapshotId, setSelectedQuotationSnapshotId] = useState('');
+
+    const navigate = useNavigate();
+    const theme = useTheme();
+    const [selectedComparisonSnapshot1Id, setSelectedComparisonSnapshot1Id] = useState('');
+    const [selectedComparisonSnapshot2Id, setSelectedComparisonSnapshot2Id] = useState('');
+    const [comparisonSnapshot1Data, setComparisonSnapshot1Data] = useState(null);
+    const [comparisonResults1, setComparisonResults1] = useState(null);
+    const [comparisonSnapshot2Data, setComparisonSnapshot2Data] = useState(null);
+    const [comparisonResults2, setComparisonResults2] = useState(null);
+    const [comparisonLoading, setComparisonLoading] = useState(false);
+
+    const fetchSnapshots = useCallback(async () => {
+        setLoading(true);
+        setError('');
+        try {
+            const response = await axios.get(`${API_BASE_URL}/api/snapshots`);
+            setSavedSnapshots(response.data);
+        } catch (err) {
+            console.error('Error fetching snapshots:', err.response?.data?.message || err.message);
+            setError(`Failed to fetch snapshots: ${err.response?.data?.message || err.message}`);
+        } finally {
+            setLoading(false);
+        }
+    }, [setLoading, setError]);
+
+    useEffect(() => {
+        fetchSnapshots();
+    }, [fetchSnapshots]);
+
+    const handleSaveSnapshot = async () => {
+        if (!snapshotName.trim()) {
+            setError('Please enter a name for the snapshot.');
+            return;
+        }
+        setLoading(true);
+        setError('');
+        setSuccessMessage('');
+
+        const snapshotData = {
+            name: snapshotName,
+            total_cost: parseFloat(currentPricingState.totalCost) || 0,
+            use_margin: currentPricingState.useMargin,
+            target_profit: parseFloat(currentPricingState.targetProfit) || 0,
+            target_margin: parseFloat(currentPricingState.targetMargin) || 0,
+            use_breakdown: currentPricingState.useBreakdown,
+            competitor_prices: currentPricingState.competitorPrices || {},
+            products: currentPricingState.products.map(p => ({
+                name: p.name,
+                revenue_percentage: p.calculationMethod === 'percentage' ? (parseFloat(p.percentage) / 100) || 0 : 0,
+                expected_units: parseFloat(p.expectedUnits) || 0,
+                cost_per_unit: parseFloat(p.costPerUnit) || 0,
+                calculation_method: p.calculationMethod,
+                orbital: parseFloat(p.orbital) || 0,
+            })),
+            expenses: currentPricingState.useBreakdown ? currentPricingState.individualCosts.map(exp => ({
+                ...exp,
+                amount: parseFloat(exp.amount) || 0
+            })) : [],
+        };
+
+        try {
+            await axios.post(`${API_BASE_URL}/api/snapshots`, snapshotData);
+            setSuccessMessage(`Snapshot "${snapshotName}" saved successfully!`);
+            setSnapshotName('');
+            fetchSnapshots();
+        } catch (err) {
+            console.error('Error saving snapshot:', err.response?.data?.message || err.message);
+            setError(`Failed to save snapshot: ${err.response?.data?.message || err.message}`);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleLoadSnapshot = async (id) => {
+        setLoading(true);
+        setError('');
+        setSuccessMessage('');
+        try {
+            const response = await axios.get(`${API_BASE_URL}/api/snapshots/${id}`);
+            const snapshot = response.data.snapshot;
+            const products = response.data.products.map(p => {
+                const loadedPercentage = (parseFloat(p.revenue_percentage) || 0) * 100;
+
+                return {
+                    name: p.name,
+                    percentage: loadedPercentage,
+                    expectedUnits: parseFloat(p.expected_units) || 0,
+                    costPerUnit: parseFloat(p.cost_per_unit) || 0,
+                    calculationMethod: p.calculation_method || 'cost-plus',
+                    orbital: parseFloat(p.orbital) || 0,
+                    // These fields will be recalculated by PricingPage after load
+                    // No need to initialize here, PricingPage will handle
+                };
+            });
+            const expenses = (response.data.expenses || []).map(exp => ({
+                ...exp,
+                amount: parseFloat(exp.amount) || 0
+            }));
+
+            onSnapshotLoaded({
+                name: snapshot.name,
+                totalCost: parseFloat(snapshot.total_cost) || 0,
+                useMargin: snapshot.use_margin,
+                targetProfit: parseFloat(snapshot.target_profit) || 0,
+                targetMargin: parseFloat(snapshot.target_margin) || 0,
+                useBreakdown: snapshot.use_breakdown,
+                individualCosts: expenses,
+                products: products,
+                competitorPrices: snapshot.competitor_prices || {},
+            });
+            setSuccessMessage(`Snapshot "${snapshot.name}" loaded successfully!`);
+            setOpenLoadDialog(false);
+            if (onCalculatePrices) {
+                onCalculatePrices();
+            }
+            if (setActiveTab) {
+                setActiveTab(0);
+            }
+        } catch (err) {
+            console.error('Error loading snapshot:', err.response?.data?.message || err.message);
+            setError(`Failed to load snapshot: ${err.response?.data?.message || err.message}`);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleDeleteSnapshot = async () => {
+        if (!snapshotToDelete) return;
+
+        setLoading(true);
+        setError('');
+        setSuccessMessage('');
+        try {
+            await axios.delete(`${API_BASE_URL}/api/snapshots/${snapshotToDelete.id}`);
+            setSuccessMessage(`Snapshot "${snapshotToDelete.name}" deleted successfully!`);
+            fetchSnapshots();
+            if (selectedComparisonSnapshot1Id === snapshotToDelete.id) {
+                setSelectedComparisonSnapshot1Id('');
+                setComparisonSnapshot1Data(null);
+                setComparisonResults1(null);
+            }
+            if (selectedComparisonSnapshot2Id === snapshotToDelete.id) {
+                setSelectedComparisonSnapshot2Id('');
+                setComparisonSnapshot2Data(null);
+                setComparisonResults2(null);
+            }
+            if (selectedQuotationSnapshotId === snapshotToDelete.id) {
+                setSelectedQuotationSnapshotId('');
+                // If the parent needs to know, call the callback
+                if (onUseForQuotations) {
+                    onUseForQuotations(null);
+                }
+            }
+        } catch (err) {
+            console.error('Error deleting snapshot:', err.response?.data?.message || err.message);
+            setError(`Failed to delete snapshot: ${err.response?.data?.message || err.message}`);
+        } finally {
+            setLoading(false);
+            setOpenDeleteDialog(false);
+            setSnapshotToDelete(null);
+        }
+    };
+
+    const handleSelectQuotationSnapshot = useCallback(async (snapshotId) => {
+        setSelectedQuotationSnapshotId(snapshotId);
+        setLoading(true);
+        setError('');
+        setSuccessMessage('');
+
+        if (!snapshotId) {
+            setLoading(false);
+            setSuccessMessage('Quotation snapshot selection cleared.');
+            navigate('/qoutes', { state: { products: [], snapshotName: 'None Selected' } }); // Ensure snapshotName is provided even if null
+            return;
+        }
+
+        try {
+            const response = await axios.get(`${API_BASE_URL}/api/snapshots/${snapshotId}`);
+            const fullSnapshotData = response.data.snapshot;
+            const products = response.data.products.map(p => ({
+                ...p,
+                revenue_percentage: parseFloat(p.revenue_percentage) || 0,
+                expected_units: parseFloat(p.expected_units) || 0,
+                cost_per_unit: parseFloat(p.cost_per_unit) || 0,
+                calculation_method: p.calculation_method || 'cost-plus',
+                orbital: parseFloat(p.orbital) || 0,
+            }));
+            const expenses = (response.data.expenses || []).map(exp => ({
+                ...exp,
+                amount: parseFloat(exp.amount) || 0
+            }));
+
+            const combinedSnapshotData = {
+                ...fullSnapshotData,
+                total_cost: parseFloat(fullSnapshotData.total_cost) || 0,
+                use_margin: fullSnapshotData.use_margin, // Ensure this is carried over
+                target_profit: parseFloat(fullSnapshotData.target_profit) || 0,
+                target_margin: parseFloat(fullSnapshotData.target_margin) || 0,
+                use_breakdown: fullSnapshotData.use_breakdown, // Ensure this is carried over
+                products,
+                expenses,
+                competitor_prices: fullSnapshotData.competitor_prices || {} // Ensure competitor_prices is included
+            };
+
+            const calculatedResults = calculateSnapshotPrices(combinedSnapshotData);
+
+            setSuccessMessage(`Snapshot "${combinedSnapshotData.name}" selected for quotations.`);
+
+            navigate('/qoutes', {
+                state: {
+                    products: calculatedResults.calculatedProducts,
+                    snapshotName: combinedSnapshotData.name,
+                    overallSummary: { // Pass the overall summary for the quotations page
+                        actualCost: calculatedResults.actualCost,
+                        totalRevenue: calculatedResults.totalRevenue,
+                        calculatedProfit: calculatedResults.calculatedProfit,
+                        use_margin: combinedSnapshotData.use_margin,
+                        target_margin: combinedSnapshotData.target_margin,
+                        target_profit: combinedSnapshotData.target_profit,
+                        use_breakdown: combinedSnapshotData.use_breakdown,
+                        expenses: combinedSnapshotData.expenses,
+                        competitor_prices: combinedSnapshotData.competitor_prices
+                    }
+                }
+            });
+
+        } catch (err) {
+            console.error('Error fetching/processing snapshot for quotations:', err.response?.data?.message || err.message);
+            setError(`Failed to load snapshot for quotations: ${err.response?.data?.message || err.message}`);
+            setSelectedQuotationSnapshotId('');
+        } finally {
+            setLoading(false);
+        }
+    }, [setError, setSuccessMessage, navigate, setLoading]);
+
+
+    const fetchAndProcessComparisonSnapshot = useCallback(async (snapshotId, setSnapshotData, setComparisonResults, dataIndex) => {
+        if (!snapshotId) {
+            setSnapshotData(null);
+            setComparisonResults(null);
+            return;
+        }
+
+        setComparisonLoading(true);
+        setError('');
+        try {
+            const response = await axios.get(`${API_BASE_URL}/api/snapshots/${snapshotId}`);
+            const fullSnapshotData = response.data.snapshot;
+            const products = response.data.products.map(p => ({
+                ...p,
+                revenue_percentage: parseFloat(p.revenue_percentage) || 0,
+                expected_units: parseFloat(p.expected_units) || 0,
+                cost_per_unit: parseFloat(p.cost_per_unit) || 0,
+                calculation_method: p.calculation_method || 'percentage',
+                orbital: parseFloat(p.orbital) || 0,
+            }));
+            const expenses = (response.data.expenses || []).map(exp => ({
+                ...exp,
+                amount: parseFloat(exp.amount) || 0
+            }));
+
+            const combinedSnapshotData = {
+                ...fullSnapshotData,
+                total_cost: parseFloat(fullSnapshotData.total_cost) || 0,
+                target_profit: parseFloat(fullSnapshotData.target_profit) || 0,
+                target_margin: parseFloat(fullSnapshotData.target_margin) || 0,
+                products,
+                expenses,
+                competitor_prices: fullSnapshotData.competitor_prices || {} // Ensure competitor_prices is passed for calculation
+            };
+
+            setSnapshotData(combinedSnapshotData);
+            setComparisonResults(calculateSnapshotPrices(combinedSnapshotData));
+            setSuccessMessage(`Snapshot ${dataIndex} loaded for comparison: ${combinedSnapshotData.name}`);
+        } catch (err) {
+            console.error('Error fetching/processing snapshot for comparison:', err.response?.data?.message || err.message);
+            setError(`Failed to load snapshot ${dataIndex} for comparison: ${err.response?.data?.message || err.message}`);
+            setSnapshotData(null);
+            setComparisonResults(null);
+        } finally {
+            setComparisonLoading(false);
+        }
+    }, [setError, setSuccessMessage]);
+
+    useEffect(() => {
+        fetchAndProcessComparisonSnapshot(selectedComparisonSnapshot1Id, setComparisonSnapshot1Data, setComparisonResults1, 1);
+    }, [selectedComparisonSnapshot1Id, fetchAndProcessComparisonSnapshot]);
+
+    useEffect(() => {
+        fetchAndProcessComparisonSnapshot(selectedComparisonSnapshot2Id, setComparisonSnapshot2Data, setComparisonResults2, 2);
+    }, [selectedComparisonSnapshot2Id, fetchAndProcessComparisonSnapshot]);
+
+    const clearComparison = () => {
+        setSelectedComparisonSnapshot1Id('');
+        setSelectedComparisonSnapshot2Id('');
+        setComparisonSnapshot1Data(null);
+        setComparisonSnapshot2Data(null);
+        setComparisonResults1(null);
+        setComparisonResults2(null);
+        setSuccessMessage('Comparison cleared.');
+    };
+
+    const renderComparisonColumn = (title, snapshot, results, id) => {
+        if (!snapshot || !results) {
+            return (
+                <Grid item xs={12} sm={6}>
+                    <Card elevation={2} sx={{ height: '100%', display: 'flex', flexDirection: 'column', borderRadius: '12px' }}>
+                        <CardContent>
+                            <Typography variant="h6" align="center" gutterBottom sx={{ color: theme.palette.primary.main }}>{title}</Typography>
+                            <Box display="flex" justifyContent="center" alignItems="center" height={150}>
+                                <Typography color="text.secondary">Select a plan above to compare.</Typography>
+                            </Box>
+                        </CardContent>
+                    </Card>
+                </Grid>
+            );
+        }
+
+        return (
+            <Grid item xs={12} sm={6}>
+                <Card elevation={2} sx={{ height: '100%', display: 'flex', flexDirection: 'column', borderRadius: '12px' }}>
+                    <CardContent sx={{ flexGrow: 1 }}>
+                        <Typography variant="h6" align="center" gutterBottom sx={{ color: theme.palette.primary.main }}>{snapshot.name}</Typography>
+                        <Typography variant="caption" color="text.secondary" align="center" display="block" mb={1}>
+                            Saved on: {new Date(snapshot.created_at).toLocaleDateString()}
+                        </Typography>
+                        <Divider sx={{ my: 2 }} />
+
+                        <Typography variant="subtitle1" fontWeight="bold" mt={2}>Overall Plan Summary:</Typography>
+                        <Typography>Total Monthly Costs: R{(parseFloat(results.actualCost) || 0).toFixed(2)}</Typography>
+                        <Typography>
+                            Target {snapshot.use_margin ?
+                                `Margin: ${(parseFloat(snapshot.target_margin) || 0).toFixed(2)}%` :
+                                `Profit: R${(parseFloat(snapshot.target_profit) || 0).toFixed(2)}`}
+                        </Typography>
+                        <Typography>Calculated Profit: R{(parseFloat(results.calculatedProfit) || 0).toFixed(2)}</Typography>
+                        <Typography>Total Sales Needed: R{(parseFloat(results.totalRevenue) || 0).toFixed(2)}</Typography>
+                        <Typography>Cost Details: {snapshot.use_breakdown ? 'Broken Down' : 'Single Total'}</Typography>
+
+                        {snapshot.use_breakdown && snapshot.expenses && snapshot.expenses.length > 0 && (
+                            <Box mt={2}>
+                                <Typography variant="subtitle2" fontWeight="bold">Individual Monthly Expenses:</Typography>
+                                <List dense disablePadding>
+                                    {snapshot.expenses.map((exp, idx) => (
+                                        <ListItem key={idx} sx={{ py: 0.2 }}>
+                                            <ListItemText primary={`${exp.label}: R${(parseFloat(exp.amount) || 0).toFixed(2)}`} />
+                                        </ListItem>
+                                    ))}
+                                </List>
+                            </Box>
+                        )}
+
+                        {snapshot.competitor_prices && Object.keys(snapshot.competitor_prices).length > 0 && (
+                            <Box mt={2}>
+                                <Typography variant="subtitle2" fontWeight="bold">Competitor Prices Recorded:</Typography>
+                                <List dense disablePadding>
+                                    {Object.entries(snapshot.competitor_prices).map(([productName, price], idx) => (
+                                        <ListItem key={idx} sx={{ py: 0.2 }}>
+                                            <ListItemText primary={`${productName}: R${(parseFloat(price) || 0).toFixed(2)}`} />
+                                        </ListItem>
+                                    ))}
+                                </List>
+                            </Box>
+                        )}
+
+                        <Typography variant="subtitle1" fontWeight="bold" mt={3}>Product Pricing Details:</Typography>
+                        {results.calculatedProducts && results.calculatedProducts.length > 0 ? (
+                            results.calculatedProducts.map((product, index) => (
+                                <Box key={index} sx={{ mb: 1.5, p: 1.5, border: '1px solid #eee', borderRadius: '8px', backgroundColor: '#f9f9f9' }}>
+                                    <Typography variant="body1" fontWeight="bold">{product.name || `Product ${index + 1}`}</Typography>
+                                    <Typography variant="body2" color="text.secondary">
+                                        Method: {product.calculationMethod === 'percentage' ? 'Sales Share' : 'Cost-Plus'}
+                                    </Typography>
+                                    {product.calculationMethod === 'percentage' && (
+                                        <>
+                                            <Typography variant="body2">Target Sales Share: {(parseFloat(product.percentage) || 0).toFixed(2)}%</Typography>
+                                            <Typography variant="body2">Expected Units: {(parseFloat(product.expectedUnits) || 0)}</Typography>
+                                            <Typography variant="body2">Unit Cost: R{(parseFloat(product.costPerUnit) || 0).toFixed(2)}</Typography>
+                                            <Typography variant="body2" sx={{ fontWeight: 'bold' }}>Calculated Price: R{(parseFloat(product.price) || 0).toFixed(2)}</Typography>
+                                            <Typography variant="body2">Profit Margin: {(parseFloat(product.percentageRevenue) || 0).toFixed(2)}%</Typography>
+                                            <Typography variant="body2">Units Needed for Share: {Math.ceil(parseFloat(product.unitsNeeded) || 0)}</Typography>
+                                        </>
+                                    )}
+                                    {product.calculationMethod === 'cost-plus' && (
+                                        <>
+                                            <Typography variant="body2">Expected Units: {(parseFloat(product.expectedUnits) || 0)}</Typography>
+                                            <Typography variant="body2">Unit Cost: R{(parseFloat(product.costPerUnit) || 0).toFixed(2)}</Typography>
+                                            <Typography variant="body2">Target Profit/Unit: R{(parseFloat(product.suggestedProfit) || 0).toFixed(2)}</Typography>
+                                            <Typography variant="body2" sx={{ fontWeight: 'bold' }}>Calculated Price: R{(parseFloat(product.price) || 0).toFixed(2)}</Typography>
+                                            <Typography variant="body2">Profit Margin: {(parseFloat(product.percentageRevenue) || 0).toFixed(2)}%</Typography>
+                                        </>
+                                    )}
+                                    {(parseFloat(product.orbital) || 0) > 0 && ( // Ensure orbital is displayed if present and > 0
+                                        <Typography variant="body2">Orbital: {(parseFloat(product.orbital) || 0).toFixed(2)}</Typography>
+                                    )}
+                                    {/* `directCosts` is not present in your current `snapshot.products` data structure
+                                        if it's intended to be displayed here, you'll need to ensure it's
+                                        fetched/processed and included in `calculatedProducts`.
+                                        For now, commented out to avoid errors.
+                                    */}
+                                    {/*
+                                    {product.directCosts && product.directCosts.length > 0 && (
+                                        <Box mt={1}>
+                                            <Typography variant="body2" fontWeight="bold">Product-Specific Costs:</Typography>
+                                            {product.directCosts.map((dc, dcIdx) => (
+                                                <Typography variant="body2" key={dcIdx} sx={{ ml: 1 }}>
+                                                    - {dc.description}: R{(parseFloat(dc.amount) || 0).toFixed(2)}
+                                                </Typography>
+                                            ))}
+                                        </Box>
+                                    )}
+                                    */}
+                                </Box>
+                            ))
+                        ) : (
+                            <Typography color="text.secondary">No product details available.</Typography>
+                        )}
+                    </CardContent>
+                </Card>
+            </Grid>
+        );
+    };
+
+
+    return (
+        <Box sx={{ p: 3 }}>
+            <Typography variant="h4" gutterBottom>Manage Snapshots</Typography>
+
+            {/* Success and Error Alerts */}
+            {loading && <CircularProgress size={24} sx={{ my: 2 }} />}
+
+
+            {/* New Section: Save Current Pricing as Snapshot */}
+            <Divider sx={{ my: 4 }} />
+            <Typography variant="h5" gutterBottom>Save Current Pricing Snapshot</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Save your current pricing calculations, including all products, expenses, and settings, as a named snapshot.
+            </Typography>
+            <Box sx={{ mb: 4, display: 'flex', gap: 2, alignItems: 'center' }}>
+                <TextField
+                    label="Snapshot Name"
+                    variant="outlined"
+                    value={snapshotName}
+                    onChange={(e) => setSnapshotName(e.target.value)}
+                    fullWidth
+                    disabled={loading}
+                />
+                <Button
+                    variant="contained"
+                    startIcon={<SaveIcon />}
+                    onClick={handleSaveSnapshot}
+                    disabled={loading || !snapshotName.trim()}
+                    sx={{ py: 1.5 }}
+                >
+                    Save Snapshot
+                </Button>
+            </Box>
+
+            {/* New Section: Load Existing Snapshots */}
+            <Divider sx={{ my: 4 }} />
+            <Typography variant="h5" gutterBottom>Load Existing Snapshots</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Load a previously saved pricing snapshot to restore its settings and product configurations.
+            </Typography>
+            <Button
+                variant="outlined"
+                startIcon={<FolderOpenIcon />}
+                onClick={() => setOpenLoadDialog(true)}
+                disabled={loading || savedSnapshots.length === 0}
+                sx={{ mb: 4 }}
+            >
+                Load Snapshot
+            </Button>
+
+            {/* Load Snapshot Dialog */}
+            <Dialog open={openLoadDialog} onClose={() => setOpenLoadDialog(false)} maxWidth="md" fullWidth>
+                <DialogTitle>Load a Saved Pricing Snapshot</DialogTitle>
+                <DialogContent dividers>
+                    {savedSnapshots.length === 0 ? (
+                        <Typography>No snapshots saved yet.</Typography>
+                    ) : (
+                        <List>
+                            {savedSnapshots.map((snapshot) => (
+                                <ListItem
+                                    key={snapshot.id}
+                                    secondaryAction={
+                                        <>
+                                            <IconButton edge="end" aria-label="load" onClick={() => handleLoadSnapshot(snapshot.id)} disabled={loading}>
+                                                <FolderOpenIcon />
+                                            </IconButton>
+                                            <IconButton edge="end" aria-label="delete" onClick={() => { setSnapshotToDelete(snapshot); setOpenDeleteDialog(true); }} disabled={loading} sx={{ ml: 1 }}>
+                                                <DeleteIcon color="error" />
+                                            </IconButton>
+                                        </>
+                                    }
+                                >
+                                    <ListItemText
+                                        primary={snapshot.name}
+                                        secondary={`Saved: ${new Date(snapshot.created_at).toLocaleDateString()} - Profit: R${(parseFloat(snapshot.target_profit) || 0).toFixed(2)}`}
+                                    />
+                                </ListItem>
+                            ))}
+                        </List>
+                    )}
+                    {loading && <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}><CircularProgress /></Box>}
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={() => setOpenLoadDialog(false)}>Cancel</Button>
+                </DialogActions>
+            </Dialog>
+
+            {/* Delete Confirmation Dialog */}
+            <Dialog open={openDeleteDialog} onClose={() => setOpenDeleteDialog(false)}>
+                <DialogTitle>Confirm Delete</DialogTitle>
+                <DialogContent>
+                    <Typography>
+                        Are you sure you want to delete the snapshot "<strong>{snapshotToDelete?.name}</strong>"?
+                        This action cannot be undone.
+                    </Typography>
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={() => setOpenDeleteDialog(false)} disabled={loading}>Cancel</Button>
+                    <Button onClick={handleDeleteSnapshot} color="error" disabled={loading}>Delete</Button>
+                </DialogActions>
+            </Dialog>
+
+            {/* New Section: Select Snapshot for Quotations */}
+            <Divider sx={{ my: 4 }} />
+            <Typography variant="h5" gutterBottom>Select Snapshot for Quotations</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Choose a saved pricing snapshot to use its product list and calculated prices for generating quotations.
+            </Typography>
+            <Box sx={{ mb: 4, display: 'flex', alignItems: 'center', gap: 2 }}>
+                <FormControl fullWidth disabled={loading || savedSnapshots.length === 0}>
+                    <InputLabel id="quotation-snapshot-select-label">Snapshot for Quotations</InputLabel>
+                    <Select
+                        labelId="quotation-snapshot-select-label"
+                        id="quotation-snapshot-select"
+                        value={selectedQuotationSnapshotId}
+                        label="Snapshot for Quotations"
+                        onChange={(e) => handleSelectQuotationSnapshot(e.target.value)}
+                    >
+                        <MenuItem value="">
+                            <em>None Selected</em>
+                        </MenuItem>
+                        {savedSnapshots.map((snapshot) => (
+                            <MenuItem key={snapshot.id} value={snapshot.id}>
+                                {snapshot.name} ({new Date(snapshot.created_at).toLocaleDateString()})
+                            </MenuItem>
+                        ))}
+                    </Select>
+                </FormControl>
+                {selectedQuotationSnapshotId && (
+                    <Button
+                        variant="outlined"
+                        color="error"
+                        startIcon={<ClearIcon />}
+                        onClick={() => handleSelectQuotationSnapshot('')}
+                        disabled={loading}
+                    >
+                        Clear
+                    </Button>
+                )}
+            </Box>
+
+
+            {/* New Section: Compare Snapshots */}
+            <Divider sx={{ my: 4 }} />
+            <Typography variant="h5" gutterBottom>Compare Snapshots</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Select two saved pricing snapshots to compare their overall summary and product pricing details side-by-side.
+            </Typography>
+            <Box sx={{ mb: 4, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                <FormControl sx={{ flexGrow: 1, minWidth: 200 }} disabled={comparisonLoading || savedSnapshots.length === 0}>
+                    <InputLabel id="compare-snapshot-1-label">Snapshot 1</InputLabel>
+                    <Select
+                        labelId="compare-snapshot-1-label"
+                        id="compare-snapshot-1-select"
+                        value={selectedComparisonSnapshot1Id}
+                        label="Snapshot 1"
+                        onChange={(e) => setSelectedComparisonSnapshot1Id(e.target.value)}
+                    >
+                        <MenuItem value=""><em>None</em></MenuItem>
+                        {savedSnapshots.map((snapshot) => (
+                            <MenuItem key={snapshot.id} value={snapshot.id}>
+                                {snapshot.name}
+                            </MenuItem>
+                        ))}
+                    </Select>
+                </FormControl>
+                <FormControl sx={{ flexGrow: 1, minWidth: 200 }} disabled={comparisonLoading || savedSnapshots.length === 0}>
+                    <InputLabel id="compare-snapshot-2-label">Snapshot 2</InputLabel>
+                    <Select
+                        labelId="compare-snapshot-2-label"
+                        id="compare-snapshot-2-select"
+                        value={selectedComparisonSnapshot2Id}
+                        label="Snapshot 2"
+                        onChange={(e) => setSelectedComparisonSnapshot2Id(e.target.value)}
+                    >
+                        <MenuItem value=""><em>None</em></MenuItem>
+                        {savedSnapshots.map((snapshot) => (
+                            <MenuItem key={snapshot.id} value={snapshot.id}>
+                                {snapshot.name}
+                            </MenuItem>
+                        ))}
+                    </Select>
+                </FormControl>
+                <Button
+                    variant="outlined"
+                    color="error"
+                    startIcon={<ClearIcon />}
+                    onClick={clearComparison}
+                    disabled={comparisonLoading || (!selectedComparisonSnapshot1Id && !selectedComparisonSnapshot2Id)}
+                >
+                    Clear Comparison
+                </Button>
+            </Box>
+
+            {(comparisonLoading || comparisonSnapshot1Data || comparisonSnapshot2Data) && (
+                <Paper elevation={3} sx={{ p: 3, mb: 4, borderRadius: '16px', backgroundColor: theme.palette.grey[50] }}>
+                    <Typography variant="h5" align="center" gutterBottom>Comparison Results</Typography>
+                    {comparisonLoading && (
+                        <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
+                            <CircularProgress />
+                            <Typography sx={{ ml: 2 }}>Loading comparison data...</Typography>
+                        </Box>
+                    )}
+                    <Grid container spacing={3}>
+                        {renderComparisonColumn("Snapshot 1", comparisonSnapshot1Data, comparisonResults1, 1)}
+                        {renderComparisonColumn("Snapshot 2", comparisonSnapshot2Data, comparisonResults2, 2)}
+                    </Grid>
+                </Paper>
+            )}
+
+            {/* Error and Success messages */}
+            {setError && <Alert severity="error" sx={{ mt: 2 }}>{setError}</Alert>}
+            {setSuccessMessage && <Alert severity="success" sx={{ mt: 2 }}>{setSuccessMessage}</Alert>}
+        </Box>
+    );
+};
+
+export default SnapshotManager;

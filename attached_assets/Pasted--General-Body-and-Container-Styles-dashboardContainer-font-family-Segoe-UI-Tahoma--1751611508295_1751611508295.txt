@@ -1,0 +1,337 @@
+/* General Body and Container Styles */
+.dashboardContainer {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #f0f4f8; /* Light blue-grey background */
+    min-height: 100vh;
+    width: 100vw;
+    padding: 2rem;
+    color: #333;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.pageTitle {
+    font-size: 2.8rem;
+    color: #2c3e50; /* Darker blue-grey for main titles */
+    margin-bottom: 2.5rem;
+    font-weight: 700;
+    text-align: center;
+    position: relative;
+    padding-bottom: 0.8rem;
+}
+
+.pageTitle::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 0;
+    transform: translateX(-50%);
+    width: 80px;
+    height: 4px;
+    background-color: #c88a31; /* Earthy accent color */
+    border-radius: 2px;
+}
+
+/* Card Styles */
+.card {
+    background-color: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+    padding: 2.5rem;
+    margin-bottom: 2rem;
+    width: 100%;
+    max-width: 900px; /* Constrain width for better readability */
+    box-sizing: border-box;
+    transition: all 0.3s ease-in-out;
+}
+
+.card:hover {
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.12);
+}
+
+.cardTitle {
+    font-size: 2rem;
+    color: #34495e; /* Slightly lighter dark blue-grey */
+    margin-bottom: 1.8rem;
+    text-align: center;
+    font-weight: 600;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 1rem;
+}
+
+.cardSubTitle {
+    font-size: 1.6rem;
+    color: #34495e;
+    margin-top: 2rem;
+    margin-bottom: 1rem;
+    font-weight: 600;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 0.8rem;
+}
+
+/* Input Group Styles */
+.inputGroup {
+    margin-bottom: 1.5rem;
+    display: flex;
+    flex-direction: column;
+}
+
+.label {
+    display: block;
+    margin-bottom: 0.6rem;
+    font-size: 1rem;
+    color: #555;
+    font-weight: 500;
+}
+
+.input,
+.select {
+    width: 100%;
+    padding: 0.8rem 1rem;
+    border: 1px solid #ccd6e0;
+    border-radius: 8px;
+    font-size: 1rem;
+    color: #333;
+    background-color: #fdfdff;
+    transition: all 0.3s ease;
+    box-sizing: border-box;
+}
+
+.input:focus,
+.select:focus {
+    border-color: #c88a31; /* Accent color on focus */
+    box-shadow: 0 0 0 3px rgba(200, 138, 49, 0.2);
+    outline: none;
+}
+
+.select {
+    -webkit-appearance: none; /* Remove default arrow on select */
+    -moz-appearance: none;
+    appearance: none;
+    background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23666%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13.6-6.4H18.9c-5%200-9.3%203.1-11.2%207.7-1.9%204.6-.3%209.7%204.3%2012.6l128%20127.9c3%203%207%204.7%2011.3%204.7s8.3-1.6%2011.3-4.7l128-127.9c4.5-3%206.1-8.1%204.2-12.7z%22%2F%3E%3C%2Fsvg%3E');
+    background-repeat: no-repeat;
+    background-position: right 1rem center;
+    background-size: 0.8em;
+    padding-right: 2.5rem; /* Make space for the custom arrow */
+}
+
+.inputHelperText {
+    font-size: 0.85rem;
+    color: #777;
+    margin-top: 0.4rem;
+    line-height: 1.4;
+}
+
+.insightText {
+    font-size: 0.85rem;
+    margin-top: 0.4rem;
+    font-weight: 500;
+    color: #dc3545; /* Error/warning color */
+}
+
+/* Product Selection Button */
+.addProductButton {
+    background-color: #4CAF50; /* Green button */
+    color: white;
+    padding: 0.8rem 1.5rem;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 1rem;
+    font-weight: 600;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+    margin-top: 1rem;
+}
+
+.addProductButton:hover {
+    background-color: #45a049;
+    transform: translateY(-2px);
+}
+
+.addProductButton:active {
+    transform: translateY(0);
+}
+
+
+/* Quotation Items Container */
+.quotationItemsContainer {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); /* Responsive grid */
+    gap: 1.5rem;
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px dashed #e0e0e0;
+}
+
+/* Individual Quoted Product Group */
+.productInputGroup {
+    background-color: #fdfdfd;
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 1.8rem;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden; /* For pseudo-element */
+}
+
+.productInputGroup::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 8px;
+    background-color: #c88a31; /* Accent stripe at the top */
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+}
+
+.productInputGroup:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+}
+
+.productGroupTitle {
+    font-size: 1.3rem;
+    color: #2c3e50;
+    margin-bottom: 1.2rem;
+    font-weight: 700;
+    text-align: center;
+    border-bottom: 1px dotted #ccc;
+    padding-bottom: 0.8rem;
+}
+
+/* Remove Product Button */
+.removeProductButton {
+    background-color: #e74c3c; /* Red for remove actions */
+    color: white;
+    padding: 0.6rem 1rem;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+    margin-top: 1rem;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.removeProductButton:hover {
+    background-color: #c0392b;
+    transform: translateY(-2px);
+}
+
+.removeProductButton:active {
+    transform: translateY(0);
+}
+
+/* Metric Cards (for summary) */
+.metricCard {
+    background-color: #e9f5ee; /* Light green background for summary */
+    border-left: 5px solid #4CAF50; /* Green accent border */
+    border-radius: 12px;
+    padding: 2rem;
+    margin-top: 2rem;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.07);
+    width: 100%;
+    max-width: 500px; /* Smaller width for summary */
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.metricCardNoBorder {
+    background-color: #f8fcf9; /* Lighter background for inner metrics */
+    border: 1px dashed #d5e8e2;
+    border-radius: 8px;
+    padding: 1rem;
+    margin-top: 1.5rem;
+}
+
+.metricCardTitle {
+    font-size: 1.8rem;
+    color: #28a745; /* Primary green for summary title */
+    margin-bottom: 1.5rem;
+    text-align: center;
+    font-weight: 700;
+}
+
+.metricItem {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 0.8rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px dotted #e0e0e0;
+}
+
+.metricItem:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+}
+
+.metricLabel {
+    font-size: 1.1rem;
+    color: #555;
+    font-weight: 500;
+}
+
+.metricValue {
+    font-size: 1.1rem;
+    color: #2c3e50;
+    font-weight: 600;
+}
+
+.metricValue[style*="font-size: 1.4rem"] { /* Specific style for Grand Total */
+    color: #c88a31; /* Accent color for total */
+    font-weight: 800;
+}
+
+/* Empty State for CSV */
+.csvEmptyState {
+    text-align: center;
+    font-size: 1.1rem;
+    color: #777;
+    padding: 2rem 0;
+    background-color: #fefefe;
+    border: 1px dashed #d0d0d0;
+    border-radius: 8px;
+    margin-top: 1.5rem;
+}
+
+/* Divider */
+.divider {
+    border: none;
+    border-top: 2px solid #ddeedd;
+    margin: 1.5rem 0;
+}
+
+/* Responsive Adjustments */
+@media (max-width: 768px) {
+    .dashboardContainer {
+        padding: 1rem;
+    }
+
+    .pageTitle {
+        font-size: 2.2rem;
+    }
+
+    .card {
+        padding: 1.5rem;
+    }
+
+    .cardTitle {
+        font-size: 1.6rem;
+    }
+
+    .productInputGroup {
+        padding: 1.2rem;
+    }
+
+    .quotationItemsContainer {
+        grid-template-columns: 1fr; /* Stack columns on smaller screens */
+    }
+}

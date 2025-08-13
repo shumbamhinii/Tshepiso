@@ -1,0 +1,152 @@
+import React from 'react';
+import {
+  Box,
+  Typography,
+  Alert,
+  Button,
+  Card,
+  CardContent,
+} from '@mui/material';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  Legend,
+} from 'recharts';
+
+const ResultsTab = ({
+  products,
+  totalRevenue,
+  targetProfit,
+  actualCost,
+  useMargin,
+  targetMargin,
+  calculatePrices,
+  error,
+}) => {
+  const safeNumber = (value) => {
+    const num = Number(value);
+    return isNaN(num) ? 0 : num;
+  };
+
+  const currentTotalVariableCosts = products.reduce((sum, product) => {
+    const costPerUnit = safeNumber(product.costPerUnit ?? product.cost);
+    const expectedUnits = safeNumber(product.expectedUnits);
+    return sum + costPerUnit * expectedUnits;
+  }, 0);
+
+  const currentOverallTotalCosts = safeNumber(actualCost) + currentTotalVariableCosts;
+  const totalRevenueRequired = useMargin
+    ? currentOverallTotalCosts / (1 - safeNumber(targetMargin) / 100)
+    : currentOverallTotalCosts + safeNumber(targetProfit);
+
+  const actualTotalRevenue = products.reduce(
+    (sum, product) => sum + safeNumber(product.price) * safeNumber(product.expectedUnits),
+    0
+  );
+
+  const currentTotalProfit = actualTotalRevenue - currentOverallTotalCosts;
+  const currentMargin = safeNumber(totalRevenue) > 0 ? (currentTotalProfit / safeNumber(totalRevenue)) * 100 : 0;
+
+  const productsWithInsights = products.map((product) => {
+    const price = safeNumber(product.price);
+    const cost = safeNumber(product.costPerUnit ?? product.cost);
+    const expectedUnits = safeNumber(product.expectedUnits);
+    const revenue = price * expectedUnits;
+    const totalCost = cost * expectedUnits;
+    const margin = price > 0 ? ((price - cost) / price) * 100 : 0;
+
+    const contributionMargin = price - cost;
+    const breakEvenUnits = contributionMargin > 0 ? Math.ceil(actualCost / contributionMargin) : 'N/A';
+
+    const insight =
+      margin < 0
+        ? 'This product is making a loss. You may need to raise the price or cut costs.'
+        : margin < 20
+        ? 'This product has a low profit margin. Consider adjusting your price.'
+        : 'This product is performing well.';
+
+    return {
+      ...product,
+      price,
+      cost,
+      revenue,
+      totalCost,
+      margin,
+      breakEvenUnits,
+      insight,
+    };
+  });
+
+  const chartData = productsWithInsights.map((p) => ({
+    name: p.name || 'Unnamed',
+    Revenue: p.revenue,
+    Cost: p.totalCost,
+  }));
+
+  const safeToFixed = (num, digits = 2) => {
+    const n = safeNumber(num);
+    return n.toFixed(digits);
+  };
+
+  return (
+    <Card elevation={3} sx={{ width: '100%', maxWidth: 800, mx: 'auto' }}>
+      <CardContent>
+        <Typography variant="h5" gutterBottom align="center">
+          Business Summary & Product Performance
+        </Typography>
+
+        {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+
+        {productsWithInsights.map((product, index) => (
+          <Box key={index} mb={2} p={2} borderBottom="1px solid #ddd">
+            <Typography variant="h6">{product.name || 'Unnamed Product'}</Typography>
+            <Typography>
+              Price: R{safeToFixed(product.price)} | Cost per Unit: R{safeToFixed(product.cost)}
+            </Typography>
+            <Typography>Expected Revenue: R{safeToFixed(product.revenue)}</Typography>
+            <Typography>Margin: {safeToFixed(product.margin, 1)}%</Typography>
+            <Typography>Break-even Units: {product.breakEvenUnits}</Typography>
+            <Alert severity={product.margin < 0 ? 'error' : product.margin < 20 ? 'warning' : 'success'}>
+              {product.insight}
+            </Alert>
+          </Box>
+        ))}
+
+        <Box height={300}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+              <XAxis dataKey="name" />
+              <YAxis />
+              <Tooltip />
+              <Legend />
+              <Bar dataKey="Revenue" fill="#4caf50" />
+              <Bar dataKey="Cost" fill="#f44336" />
+            </BarChart>
+          </ResponsiveContainer>
+        </Box>
+
+        <Box mt={3}>
+          <Typography><strong>Total Revenue:</strong> R{safeToFixed(actualTotalRevenue)}</Typography>
+          <Typography><strong>Fixed Costs:</strong> R{safeToFixed(actualCost)}</Typography>
+          <Typography><strong>Variable Costs:</strong> R{safeToFixed(currentTotalVariableCosts)}</Typography>
+          <Typography><strong>Overall Costs:</strong> R{safeToFixed(currentOverallTotalCosts)}</Typography>
+          <Typography><strong>Profit:</strong> R{safeToFixed(currentTotalProfit)}</Typography>
+          <Typography><strong>Margin:</strong> {safeToFixed(currentMargin)}%</Typography>
+          <Typography sx={{ mt: 2, fontStyle: 'italic' }}>
+            {useMargin ? `Target margin used: ${targetMargin}%` : 'Target profit used'}
+          </Typography>
+        </Box>
+
+        <Button variant="contained" color="success" onClick={calculatePrices} fullWidth sx={{ mt: 3 }}>
+          Recalculate Prices
+        </Button>
+      </CardContent>
+    </Card>
+  );
+};
+
+export default ResultsTab;

@@ -1,0 +1,805 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+    Box,
+    Typography,
+    TextField,
+    Card,
+    CardContent,
+    Button,
+    InputAdornment,
+    Grid,
+    IconButton,
+    Paper,
+    Alert,
+    FormControlLabel, // Added for Switch
+    Switch, // Added for Switch
+} from '@mui/material';
+import RemoveIcon from '@mui/icons-material/Remove';
+import AddIcon from '@mui/icons-material/Add';
+import { motion } from 'framer-motion';
+import {
+    PieChart,
+    Pie,
+    Cell,
+    Tooltip as RechartsTooltip,
+    ResponsiveContainer,
+    BarChart,
+    Bar,
+    XAxis,
+    YAxis,
+    CartesianGrid,
+    Legend,
+} from 'recharts';
+
+// Ensure 'xlsx' library is installed if you want Excel export: npm install xlsx
+// If not installed or you don't need it, you can remove the import and the exportToExcel function.
+import { utils, writeFile } from 'xlsx';
+
+const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#AA00FF', '#FF4444', '#8884d8'];
+
+const BudgetTab = ({ products = [], actualCost = 0, loading = false, totalRevenue: initialTotalRevenue }) => {
+    // Editable fixed costs breakdown (with planner adjustments)
+    const [fixedCosts, setFixedCosts] = useState(() => {
+        if (actualCost > 0) {
+            // Attempt to distribute initial actualCost if it's substantial
+            return [
+                { id: 1, name: 'Rent', amount: actualCost * 0.4, plannedReductionPercent: 0 },
+                { id: 2, name: 'Salaries', amount: actualCost * 0.4, plannedReductionPercent: 0 },
+                { id: 3, name: 'Utilities', amount: actualCost * 0.2, plannedReductionPercent: 0 },
+            ];
+        }
+        return [{ id: 1, name: 'General Fixed Cost', amount: 0, plannedReductionPercent: 0 }];
+    });
+
+    // Editable products with planned reduction % for cost per unit and hypothetical price changes
+    const [editableProducts, setEditableProducts] = useState(() => {
+        // Initialize editable products from props with a default adjustment of 0%
+        return Array.isArray(products) && products.length > 0
+            ? products.map((p, idx) => ({
+                id: p.id || idx,
+                name: p.name || `Product ${idx + 1}`,
+                units: p.expectedUnits || 0,
+                costPerUnit: p.costPerUnit || 0,
+                pricePerUnit: p.price || 0, // Use the calculated price from PricingPage as the starting point
+                plannedReductionPercent: 0, // To simulate cost reductions for products
+                priceAdjustmentType: 'percentage', // 'percentage' or 'amount'
+                priceAdjustmentValue: 0,
+            }))
+            : []; // Start empty if no products from props
+    });
+
+    // New state for hypothetical revenue input
+    const [plannedSalesGoalInput, setPlannedSalesGoalInput] = useState(initialTotalRevenue || 0);
+
+    // New state for other income items (e.g., credits, grants)
+    const [otherIncomeItems, setOtherIncomeItems] = useState([{ id: 1, name: 'Other Income Source', amount: 0 }]);
+
+
+    // Effect to re-initialize fixedCosts, editableProducts and plannedSalesGoalInput when actualCost or products prop changes
+    useEffect(() => {
+        setFixedCosts(() => {
+            if (actualCost > 0) {
+                return [
+                    { id: 1, name: 'Rent', amount: actualCost * 0.4, plannedReductionPercent: 0 },
+                    { id: 2, name: 'Salaries', amount: actualCost * 0.4, plannedReductionPercent: 0 },
+                    { id: 3, name: 'Utilities', amount: actualCost * 0.2, plannedReductionPercent: 0 },
+                ];
+            }
+            return [{ id: 1, name: 'General Fixed Cost', amount: 0, plannedReductionPercent: 0 }];
+        });
+
+        setEditableProducts(
+            Array.isArray(products) && products.length > 0
+                ? products.map((p, idx) => ({
+                    id: p.id || idx,
+                    name: p.name || `Product ${idx + 1}`,
+                    units: p.expectedUnits || 0,
+                    costPerUnit: p.costPerUnit || 0,
+                    pricePerUnit: p.price || 0,
+                    plannedReductionPercent: 0,
+                    priceAdjustmentType: 'percentage', // Default to percentage
+                    priceAdjustmentValue: 0,
+                }))
+                : []
+        );
+        setPlannedSalesGoalInput(initialTotalRevenue || 0); // Reset planned sales goal
+        setOtherIncomeItems([{ id: 1, name: 'Other Income Source', amount: 0 }]); // Reset other income
+    }, [actualCost, products, initialTotalRevenue]); // Depend on actualCost, products, and initialTotalRevenue to re-initialize
+
+    // --- Handlers for editing fixed costs ---
+    const handleFixedCostChange = (index, field, value) => {
+        const updated = [...fixedCosts];
+        if (field === 'name') {
+            updated[index].name = value;
+        } else if (field === 'amount' || field === 'plannedReductionPercent') {
+            updated[index][field] = parseFloat(value) || 0;
+        }
+        setFixedCosts(updated);
+    };
+
+    const addFixedCostItem = () => {
+        setFixedCosts([...fixedCosts, { id: Date.now(), name: '', amount: 0, plannedReductionPercent: 0 }]);
+    };
+    const removeFixedCostItem = (idToRemove) => {
+        setFixedCosts(fixedCosts.filter((cost) => cost.id !== idToRemove));
+    };
+
+    // --- Handlers for editing products ---
+    const handleProductChange = (index, field, value) => {
+        const updated = [...editableProducts];
+        if (['units', 'costPerUnit', 'pricePerUnit', 'plannedReductionPercent', 'priceAdjustmentValue'].includes(field)) {
+            updated[index][field] = parseFloat(value) || 0;
+        } else {
+            updated[index][field] = value;
+        }
+        setEditableProducts(updated);
+    };
+
+    const addProduct = () => {
+        setEditableProducts([
+            ...editableProducts,
+            {
+                id: Date.now(),
+                name: '',
+                units: 0,
+                costPerUnit: 0,
+                pricePerUnit: 0,
+                plannedReductionPercent: 0,
+                priceAdjustmentType: 'percentage',
+                priceAdjustmentValue: 0,
+            },
+        ]);
+    };
+    const removeProduct = (idToRemove) => {
+        setEditableProducts(editableProducts.filter((product) => product.id !== idToRemove));
+    };
+
+    // --- Handlers for other income ---
+    const handleOtherIncomeChange = (index, field, value) => {
+        const updated = [...otherIncomeItems];
+        if (field === 'name') {
+            updated[index].name = value;
+        } else if (field === 'amount') {
+            updated[index].amount = parseFloat(value) || 0;
+        }
+        setOtherIncomeItems(updated);
+    };
+
+    const addOtherIncomeItem = () => {
+        setOtherIncomeItems([...otherIncomeItems, { id: Date.now(), name: '', amount: 0 }]);
+    };
+    const removeOtherIncomeItem = (idToRemove) => {
+        setOtherIncomeItems(otherIncomeItems.filter((item) => item.id !== idToRemove));
+    };
+
+
+    // --- Calculations for adjusted values ---
+
+    // Calculate adjusted fixed cost amounts
+    const fixedCostsAdjusted = fixedCosts.map((cost) => {
+        const adjustedAmount = cost.amount * (1 - (cost.plannedReductionPercent || 0) / 100);
+        return { ...cost, adjustedAmount: Math.max(0, adjustedAmount) }; // Ensure non-negative
+    });
+
+    // Calculate adjusted product costs (cost per unit after planned reduction) and adjusted prices
+    const productsAdjusted = editableProducts.map((p) => {
+        const adjustedCostPerUnit = p.costPerUnit * (1 - (p.plannedReductionPercent || 0) / 100);
+        let adjustedPricePerUnit = p.pricePerUnit;
+
+        if (p.priceAdjustmentType === 'percentage') {
+            adjustedPricePerUnit = p.pricePerUnit * (1 - (p.priceAdjustmentValue || 0) / 100);
+        } else if (p.priceAdjustmentType === 'amount') {
+            adjustedPricePerUnit = p.pricePerUnit - (p.priceAdjustmentValue || 0);
+        }
+
+        return {
+            ...p,
+            adjustedCostPerUnit: Math.max(0, adjustedCostPerUnit), // Ensure non-negative
+            adjustedPricePerUnit: Math.max(0, adjustedPricePerUnit), // Ensure non-negative
+        };
+    });
+
+    // Totals calculation (Planned Scenario)
+    const fixedCostTotalOriginal = fixedCosts.reduce((sum, c) => sum + (parseFloat(c.amount) || 0), 0);
+    const fixedCostTotalAdjusted = fixedCostsAdjusted.reduce((sum, c) => sum + c.adjustedAmount, 0);
+
+    const variableCostTotalOriginal = editableProducts.reduce(
+        (sum, p) => sum + (p.units * (p.costPerUnit || 0)),
+        0
+    );
+    const variableCostTotalAdjusted = productsAdjusted.reduce(
+        (sum, p) => sum + (p.units * (p.adjustedCostPerUnit || 0)),
+        0
+    );
+
+    const totalCostOriginal = fixedCostTotalOriginal + variableCostTotalOriginal;
+    const totalCostAdjusted = fixedCostTotalAdjusted + variableCostTotalAdjusted;
+
+    // Calculate original sales estimate from initial products data
+    const originalProductsTotalSales = products.reduce((sum, p) => sum + (p.expectedUnits * (p.price || 0)), 0);
+
+    // Calculate total other income
+    const totalOtherIncome = otherIncomeItems.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+
+
+    // Determine the planned sales goal to use: direct input takes precedence, otherwise sum of product revenues + other income
+    const plannedSalesGoal = parseFloat(plannedSalesGoalInput) > 0
+        ? parseFloat(plannedSalesGoalInput)
+        : (productsAdjusted.reduce((sum, p) => sum + (p.units * (p.adjustedPricePerUnit || 0)), 0) + totalOtherIncome); // Use adjusted price here + other income
+
+
+    const profitOriginal = totalCostOriginal-originalProductsTotalSales; // Use originalProductsTotalSales for original profit
+    const profitAdjusted = totalCostAdjusted-plannedSalesGoal ;
+
+    const profitMarginPercentOriginal = originalProductsTotalSales > 0 ? (profitOriginal / originalProductsTotalSales) * 100 : 0;
+    const profitMarginPercentAdjusted = plannedSalesGoal > 0 ? (profitAdjusted / plannedSalesGoal) * 100 : 0;
+
+    // Breakeven Point Calculation
+    let breakevenSalesNeeded = 0;
+    // Contribution Margin Ratio = (Sales - Variable Costs) / Sales
+    // Breakeven Sales = Fixed Costs / Contribution Margin Ratio
+    const contributionMargin = plannedSalesGoal - variableCostTotalAdjusted;
+    const contributionMarginRatio = plannedSalesGoal > 0 ? (contributionMargin / plannedSalesGoal) : 0;
+
+    if (contributionMarginRatio > 0) {
+        breakevenSalesNeeded = fixedCostTotalAdjusted / contributionMarginRatio;
+    }
+
+
+    // --- Insights based on adjustments ---
+    const generateInsights = useCallback(() => {
+        const insights = [];
+
+        // Overall profitability status
+        if (profitAdjusted < 0) {
+            insights.push({
+                type: 'error',
+                message: `Your plan shows a LOSS of R${Math.abs(profitAdjusted).toFixed(2)}. This means your total costs (R${totalCostAdjusted.toFixed(2)}) are too high or your planned sales (R${plannedSalesGoal.toFixed(2)}) are too low to make a profit.`,
+            });
+        } else if (profitAdjusted > 0 && profitMarginPercentAdjusted < 15) {
+            insights.push({
+                type: 'warning',
+                message: `Your planned profit margin (${profitMarginPercentAdjusted.toFixed(1)}%) is a bit low. Try cutting more costs or aiming for higher sales/prices.`,
+            });
+        } else if (profitMarginPercentAdjusted >= 15 && profitMarginPercentAdjusted < 30) {
+            insights.push({
+                type: 'info',
+                message: `Your planned profit margin (${profitMarginPercentAdjusted.toFixed(1)}%) is good! Keep optimizing.`,
+            });
+        } else if (profitMarginPercentAdjusted >= 30) {
+            insights.push({
+                type: 'success',
+                message: `Excellent! Your planned profit margin (${profitMarginPercentAdjusted.toFixed(1)}%) is very strong. This means your business is running very efficiently.`,
+            });
+        }
+
+        // Breakeven insights
+        if (breakevenSalesNeeded > 0 && breakevenSalesNeeded < plannedSalesGoal) {
+            insights.push({
+                type: 'success',
+                message: `You need to make R${breakevenSalesNeeded.toFixed(2)} in sales to cover all your costs. Your planned sales are higher, so you're on track for profit!`,
+            });
+        } else if (breakevenSalesNeeded > plannedSalesGoal && plannedSalesGoal > 0) {
+             insights.push({
+                type: 'warning',
+                message: `You need to make R${breakevenSalesNeeded.toFixed(2)} in sales to cover costs, but your planned sales are only R${plannedSalesGoal.toFixed(2)}. You need to sell more or cut costs to break even.`,
+            });
+        } else if (breakevenSalesNeeded === 0 && plannedSalesGoal > 0 && totalCostAdjusted === 0) {
+             insights.push({
+                type: 'info',
+                message: `Great job! With no adjusted costs, you break even at R0 sales.`,
+            });
+        }
+
+
+        // Identify biggest fixed cost after adjustment
+        const biggestFixed = fixedCostsAdjusted.reduce(
+            (max, c) => (c.adjustedAmount > max.adjustedAmount ? c : max),
+            fixedCostsAdjusted[0] || { name: 'N/A', adjustedAmount: 0, plannedReductionPercent: 0 }
+        );
+
+        if (biggestFixed.adjustedAmount > 0 && biggestFixed.name !== 'N/A') {
+            if (biggestFixed.plannedReductionPercent === 0) {
+                insights.push({
+                    type: 'info',
+                    message: `"${biggestFixed.name}" is your largest fixed cost (R${biggestFixed.adjustedAmount.toFixed(2)}). Can you find a way to reduce it?`,
+                });
+            } else if (biggestFixed.plannedReductionPercent > 0) {
+                insights.push({
+                    type: 'success',
+                    message: `Smart move! You planned a ${biggestFixed.plannedReductionPercent}% cut for "${biggestFixed.name}", saving R${(fixedCosts.find(fc => fc.id === biggestFixed.id).amount - biggestFixed.adjustedAmount).toFixed(2)}.`,
+                });
+            }
+        }
+
+        // Product insights for cost reduction
+        const productsWithSignificantCostReduction = productsAdjusted.filter(p => p.plannedReductionPercent > 0);
+        if (productsWithSignificantCostReduction.length > 0) {
+            insights.push({
+                type: 'success',
+                message: `You've planned to cut costs for: ${productsWithSignificantCostReduction.map(p => p.name).join(', ')}. This helps your overall profit!`,
+            });
+        } else {
+            insights.push({
+                type: 'info',
+                message: `Think about how you can reduce your costs for each product. Use the "Cut your cost by %" field.`,
+            });
+        }
+
+
+        // Revenue vs Cost adjusted
+        if (plannedSalesGoal < totalCostAdjusted) {
+             insights.push({
+                type: 'error',
+                message: `Your planned sales (R${plannedSalesGoal.toFixed(2)}) are less than your total adjusted costs (R${totalCostAdjusted.toFixed(2)}). You're likely to lose money with this plan.`,
+            });
+        } else if (plannedSalesGoal > totalCostAdjusted && profitAdjusted > 0) {
+             insights.push({
+                type: 'success',
+                message: `Your planned sales (R${plannedSalesGoal.toFixed(2)}) are more than your total adjusted costs (R${totalCostAdjusted.toFixed(2)}). This plan looks profitable!`,
+            });
+        }
+
+        return insights;
+    }, [fixedCosts, fixedCostsAdjusted, productsAdjusted, plannedSalesGoal, profitAdjusted, profitMarginPercentAdjusted, originalProductsTotalSales, totalCostAdjusted, breakevenSalesNeeded]);
+
+    const insights = generateInsights();
+
+    // Pie chart data for adjusted costs & profit
+    const pieData = [
+        { name: 'Fixed Costs', value: fixedCostTotalAdjusted },
+        { name: 'Variable Costs', value: variableCostTotalAdjusted },
+        { name: 'Your Profit', value: profitAdjusted > 0 ? profitAdjusted : 0 },
+    ].filter(item => item.value > 0); // Only show segments with positive value
+
+    // Bar data for adjusted fixed costs
+    const fixedCostsBarData = fixedCostsAdjusted.map((fc) => ({
+        name: fc.name || 'Unnamed',
+        amount: fc.adjustedAmount,
+    }));
+
+    // Export function to Excel
+    const exportToExcel = () => {
+        const fixedCostsExport = fixedCostsAdjusted.map((c) => ({
+            'Cost Name': c.name,
+            'Original Monthly Cost (R)': c.amount,
+            'Planned Reduction (%)': c.plannedReductionPercent,
+            'Adjusted Monthly Cost (R)': c.adjustedAmount,
+        }));
+        const productsExport = productsAdjusted.map((p) => ({
+            'Product Name': p.name,
+            'Units to Sell': p.units,
+            'Original Cost Per Item (R)': p.costPerUnit,
+            'Adjusted Cost Per Item (R)': p.adjustedCostPerUnit,
+            'Original Selling Price Per Item (R)': p.pricePerUnit,
+            'Price Adjustment Type': p.priceAdjustmentType === 'percentage' ? 'Percentage' : 'Amount (R)',
+            'Price Adjustment Value': p.priceAdjustmentValue,
+            'Adjusted Selling Price Per Item (R)': p.adjustedPricePerUnit.toFixed(2),
+            'Cost Reduction (%)': p.plannedReductionPercent,
+            'Planned Sales from Product (R)': (p.units * p.adjustedPricePerUnit).toFixed(2)
+        }));
+        const otherIncomeExport = otherIncomeItems.map((item) => ({
+            'Income Source': item.name,
+            'Amount (R)': item.amount,
+        }));
+
+        const summaryExport = [
+            { Metric: 'Original Fixed Costs', Value: fixedCostTotalOriginal.toFixed(2) },
+            { Metric: 'Adjusted Fixed Costs', Value: fixedCostTotalAdjusted.toFixed(2) },
+            { Metric: 'Original Variable Costs', Value: variableCostTotalOriginal.toFixed(2) },
+            { Metric: 'Adjusted Variable Costs', Value: variableCostTotalAdjusted.toFixed(2) },
+            { Metric: 'Original Total Costs', Value: totalCostOriginal.toFixed(2) },
+            { Metric: 'Adjusted Total Costs', Value: totalCostAdjusted.toFixed(2) },
+            { Metric: 'Current Sales Estimate', Value: originalProductsTotalSales.toFixed(2) },
+            { Metric: 'Total Other Income', Value: totalOtherIncome.toFixed(2) }, // Added to summary
+            { Metric: 'Your Planned Sales Goal', Value: plannedSalesGoal.toFixed(2) },
+            { Metric: 'Sales Needed to Break Even', Value: breakevenSalesNeeded.toFixed(2) },
+            { Metric: 'Original Profit', Value: profitOriginal.toFixed(2) },
+            { Metric: 'Adjusted Profit', Value: profitAdjusted.toFixed(2) },
+            { Metric: 'Original Profit Margin (%)', Value: profitMarginPercentOriginal.toFixed(2) },
+            { Metric: 'Adjusted Profit Margin (%)', Value: profitMarginPercentAdjusted.toFixed(2) },
+        ];
+
+
+        const wb = utils.book_new();
+        utils.book_append_sheet(wb, utils.json_to_sheet(summaryExport), 'Budget Summary');
+        utils.book_append_sheet(wb, utils.json_to_sheet(fixedCostsExport), 'Fixed Costs Breakdown');
+        utils.book_append_sheet(wb, utils.json_to_sheet(productsExport), 'Products Breakdown');
+        utils.book_append_sheet(wb, utils.json_to_sheet(otherIncomeExport), 'Other Income Breakdown'); // Added to Excel export
+        writeFile(wb, 'OrganizationBudget_Planner.xlsx');
+    };
+
+    return (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
+            <Card elevation={4} sx={{ maxWidth: 900, margin: 'auto', p: 3, borderRadius: '12px' }}>
+                <Typography variant="h4" gutterBottom align="center" sx={{ color: 'text.primary', mb: 3 }}>
+                    Your Business Budget Helper
+                </Typography>
+
+                <Typography variant="subtitle1" gutterBottom align="center" sx={{ color: 'text.secondary', mb: 4 }}>
+                    Plan your costs and sales to see how profitable your business can be!
+                </Typography>
+
+                {/* Planned Sales Goal Section */}
+                <Typography variant="h6" gutterBottom sx={{ mt: 2, color: 'text.primary' }}>
+                    Your Sales Goal
+                </Typography>
+                <Paper variant="outlined" sx={{ p: 3, mb: 4, borderRadius: '12px' }}> {/* Increased padding and border radius */}
+                    <TextField
+                        label="Planned Total Sales (R)"
+                        type="number"
+                        value={plannedSalesGoalInput === 0 ? '' : plannedSalesGoalInput.toString().replace(/^0+/, '')}
+                        onChange={(e) => setPlannedSalesGoalInput(parseFloat(e.target.value) || 0)}
+                        fullWidth
+                        disabled={loading}
+                        InputProps={{
+                            startAdornment: <InputAdornment position="start">R</InputAdornment>,
+                        }}
+                        helperText="Enter your total sales target here. Leave blank to use sales from your products and other income below."
+                        sx={{ maxWidth: '80%', mx: 'auto', display: 'block', mb: 2 }} // Added margin-bottom
+                    />
+                     <Typography variant="body2" color="text.secondary" align="center">
+                        Sales from products & other income: R{(productsAdjusted.reduce((sum, p) => sum + (p.units * (p.adjustedPricePerUnit || 0)), 0) + totalOtherIncome).toFixed(2)}
+                    </Typography>
+                </Paper>
+
+                {/* Other Income Section */}
+                <Typography variant="h6" gutterBottom sx={{ mt: 4, color: 'text.primary' }}>
+                    Other Income (Non-Sales)
+                </Typography>
+                <Paper variant="outlined" sx={{ p: 3, mb: 4, borderRadius: '12px' }}>
+                    {otherIncomeItems.map((item, idx) => (
+                        <Box key={item.id} sx={{ mb: 3, pb: 2, borderBottom: '1px dashed #eee', '&:last-child': { borderBottom: 'none' } }}>
+                            <Grid container spacing={2} alignItems="center">
+                                <Grid item xs={12} sm={7}>
+                                    <TextField
+                                        label="Income Source Name"
+                                        fullWidth
+                                        value={item.name}
+                                        onChange={(e) => handleOtherIncomeChange(idx, 'name', e.target.value)}
+                                        disabled={loading}
+                                    />
+                                </Grid>
+                                <Grid item xs={12} sm={4}>
+                                    <TextField
+                                        label="Amount (R)"
+                                        fullWidth
+                                        type="number"
+                                        value={item.amount === 0 ? '' : item.amount.toString().replace(/^0+/, '')}
+                                        onChange={(e) => handleOtherIncomeChange(idx, 'amount', e.target.value)}
+                                        InputProps={{ startAdornment: <InputAdornment position="start">R</InputAdornment> }}
+                                        disabled={loading}
+                                    />
+                                </Grid>
+                                <Grid item xs={12} sm={1} sx={{ display: 'flex', justifyContent: 'flex-end', pr: { xs: 0, sm: 1 } }}>
+                                    {otherIncomeItems.length > 1 && (
+                                        <IconButton onClick={() => removeOtherIncomeItem(item.id)} disabled={loading} color="error">
+                                            <RemoveIcon />
+                                        </IconButton>
+                                    )}
+                                </Grid>
+                            </Grid>
+                        </Box>
+                    ))}
+                    <Box sx={{ mt: 3, textAlign: 'center' }}>
+                        <Button variant="outlined" onClick={addOtherIncomeItem} disabled={loading} startIcon={<AddIcon />}>
+                            Add Another Income Source
+                        </Button>
+                    </Box>
+                </Paper>
+
+
+                {/* Fixed Costs Section */}
+                <Typography variant="h6" gutterBottom sx={{ mt: 4, color: 'text.primary' }}> {/* Increased margin-top */}
+                    Your Fixed Costs (Monthly Bills)
+                </Typography>
+                <Paper variant="outlined" sx={{ p: 3, mb: 4, borderRadius: '12px' }}> {/* Increased padding and border radius */}
+                    {fixedCosts.map((cost, idx) => (
+                        <Box key={cost.id} sx={{ mb: 3, pb: 2, borderBottom: '1px dashed #eee', '&:last-child': { borderBottom: 'none' } }}> {/* Added bottom border for separation */}
+                            <Grid container spacing={2} alignItems="center">
+                                <Grid item xs={12} sm={4}>
+                                    <TextField
+                                        label="Type of Cost"
+                                        fullWidth
+                                        value={cost.name}
+                                        onChange={(e) => handleFixedCostChange(idx, 'name', e.target.value)}
+                                        disabled={loading}
+                                    />
+                                </Grid>
+                                <Grid item xs={6} sm={3}>
+                                    <TextField
+                                        label="Monthly Cost (R)"
+                                        fullWidth
+                                        type="number"
+                                        value={cost.amount === 0 ? '' : cost.amount.toString().replace(/^0+/, '')}
+                                        onChange={(e) => handleFixedCostChange(idx, 'amount', e.target.value)}
+                                        InputProps={{ startAdornment: <InputAdornment position="start">R</InputAdornment> }}
+                                        disabled={loading}
+                                    />
+                                </Grid>
+                                <Grid item xs={6} sm={4}>
+                                    <TextField
+                                        label="Cut this cost by %"
+                                        fullWidth
+                                        type="number"
+                                        value={cost.plannedReductionPercent === 0 ? '' : cost.plannedReductionPercent.toString().replace(/^0+/, '')}
+                                        onChange={(e) => handleFixedCostChange(idx, 'plannedReductionPercent', e.target.value)}
+                                        InputProps={{ endAdornment: <InputAdornment position="end">%</InputAdornment> }}
+                                        disabled={loading}
+                                        helperText="Plan a saving"
+                                    />
+                                </Grid>
+                                <Grid item xs={12} sm={1} sx={{ display: 'flex', justifyContent: 'flex-end', pr: { xs: 0, sm: 1 } }}>
+                                    {fixedCosts.length > 1 && (
+                                        <IconButton onClick={() => removeFixedCostItem(cost.id)} disabled={loading} color="error">
+                                            <RemoveIcon />
+                                        </IconButton>
+                                    )}
+                                </Grid>
+                            </Grid>
+                        </Box>
+                    ))}
+                    <Box sx={{ mt: 3, textAlign: 'center' }}>
+                        <Button variant="outlined" onClick={addFixedCostItem} disabled={loading} startIcon={<AddIcon />}>
+                            Add Another Fixed Cost
+                        </Button>
+                    </Box>
+                </Paper>
+
+                {/* Products & Variable Costs Section */}
+                <Typography variant="h6" gutterBottom sx={{ mt: 4, color: 'text.primary' }}>
+                    Your Products & Their Costs
+                </Typography>
+                <Paper variant="outlined" sx={{ p: 3, mb: 4, borderRadius: '12px' }}> {/* Increased padding and border radius */}
+                    {editableProducts.length === 0 && !loading && (
+                         <Typography variant="body2" color="text.secondary" sx={{ p: 2, textAlign: 'center' }}>
+                            No products loaded from the "Products" tab. Please add products there first, or add them manually below.
+                        </Typography>
+                    )}
+                    {editableProducts.map((product, idx) => (
+                        <Box key={product.id} sx={{ mb: 3, borderBottom: '1px dashed #eee', pb: 2, '&:last-child': { borderBottom: 'none' } }}>
+                            <Grid container spacing={2} alignItems="center">
+                                <Grid item xs={12} sm={3}> {/* Adjusted width */}
+                                    <TextField
+                                        label="Product Name"
+                                        fullWidth
+                                        value={product.name}
+                                        onChange={(e) => handleProductChange(idx, 'name', e.target.value)}
+                                        disabled={loading}
+                                    />
+                                </Grid>
+                                <Grid item xs={6} sm={2}> {/* Adjusted width */}
+                                    <TextField
+                                        label="How many to sell?"
+                                        type="number"
+                                        fullWidth
+                                        value={product.units === 0 ? '' : product.units.toString().replace(/^0+/, '')}
+                                        onChange={(e) => handleProductChange(idx, 'units', e.target.value)}
+                                        disabled={loading}
+                                        inputProps={{ min: 0 }}
+                                    />
+                                </Grid>
+                                <Grid item xs={6} sm={2}> {/* Adjusted width */}
+                                    <TextField
+                                        label="Your Cost/Item (R)"
+                                        type="number"
+                                        fullWidth
+                                        value={product.costPerUnit === 0 ? '' : product.costPerUnit.toString().replace(/^0+/, '')}
+                                        onChange={(e) => handleProductChange(idx, 'costPerUnit', e.target.value)}
+                                        InputProps={{ startAdornment: <InputAdornment position="start">R</InputAdornment> }}
+                                        disabled={loading}
+                                        inputProps={{ min: 0 }}
+                                    />
+                                </Grid>
+                                <Grid item xs={12} sm={4}> {/* Combined price fields */}
+                                    <TextField
+                                        label="Original Selling Price/Item (R)"
+                                        type="number"
+                                        fullWidth
+                                        value={product.pricePerUnit === 0 ? '' : product.pricePerUnit.toString().replace(/^0+/, '')}
+                                        onChange={(e) => handleProductChange(idx, 'pricePerUnit', e.target.value)}
+                                        InputProps={{ startAdornment: <InputAdornment position="start">R</InputAdornment> }}
+                                        disabled={loading}
+                                        inputProps={{ min: 0 }}
+                                        sx={{ mb: 1 }} // Margin below original price
+                                    />
+                                    <FormControlLabel
+                                        control={
+                                            <Switch
+                                                checked={product.priceAdjustmentType === 'amount'}
+                                                onChange={(e) => handleProductChange(idx, 'priceAdjustmentType', e.target.checked ? 'amount' : 'percentage')}
+                                                name={`priceAdjustmentType-${idx}`}
+                                                color="primary"
+                                                disabled={loading}
+                                            />
+                                        }
+                                        label={product.priceAdjustmentType === 'amount' ? 'Adjust by Amount (R)' : 'Adjust by Percentage (%)'}
+                                        sx={{ mb: 1 }}
+                                    />
+                                    <TextField
+                                        label={product.priceAdjustmentType === 'percentage' ? "Reduce Price by %" : "Reduce Price by Amount (R)"}
+                                        type="number"
+                                        fullWidth
+                                        value={product.priceAdjustmentValue === 0 ? '' : product.priceAdjustmentValue.toString().replace(/^0+/, '')}
+                                        onChange={(e) => handleProductChange(idx, 'priceAdjustmentValue', e.target.value)}
+                                        InputProps={{
+                                            startAdornment: product.priceAdjustmentType === 'amount' ? <InputAdornment position="start">R</InputAdornment> : null,
+                                            endAdornment: product.priceAdjustmentType === 'percentage' ? <InputAdornment position="end">%</InputAdornment> : null,
+                                        }}
+                                        disabled={loading}
+                                        helperText="Plan a price change"
+                                    />
+                                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                                        New Selling Price: R{productsAdjusted[idx]?.adjustedPricePerUnit.toFixed(2)}
+                                    </Typography>
+                                </Grid>
+                                <Grid item xs={6} sm={1.5}> {/* Adjusted width */}
+                                    <TextField
+                                        label="Cut your cost by %"
+                                        type="number"
+                                        fullWidth
+                                        value={product.plannedReductionPercent === 0 ? '' : product.plannedReductionPercent.toString().replace(/^0+/, '')}
+                                        onChange={(e) => handleProductChange(idx, 'plannedReductionPercent', e.target.value)}
+                                        InputProps={{ endAdornment: <InputAdornment position="end">%</InputAdornment> }}
+                                        disabled={loading}
+                                        helperText="Plan a saving"
+                                    />
+                                </Grid>
+                                <Grid item xs={12} sm={1} sx={{ display: 'flex', justifyContent: 'flex-end', pr: { xs: 0, sm: 1 } }}>
+                                    {editableProducts.length > 0 && (
+                                        <IconButton onClick={() => removeProduct(product.id)} disabled={loading} color="error">
+                                            <RemoveIcon />
+                                        </IconButton>
+                                    )}
+                                </Grid>
+                            </Grid>
+                        </Box>
+                    ))}
+                    <Box sx={{ mt: 3, textAlign: 'center' }}>
+                        <Button variant="outlined" onClick={addProduct} disabled={loading} startIcon={<AddIcon />}>
+                            Add Another Product
+                        </Button>
+                    </Box>
+                </Paper>
+
+                {/* Budget Summary */}
+                <Typography variant="h6" gutterBottom sx={{ mt: 4, color: 'text.primary' }}>
+                    Your Budget Snapshot (Planned)
+                </Typography>
+                <Paper elevation={2} sx={{ p: 3, mb: 4, borderRadius: '12px', borderLeft: '4px solid #CC7722' }}> {/* Increased padding and border radius */}
+                    <Grid container spacing={2}>
+                        <Grid item xs={12} sm={6}>
+                            <Typography variant="body1" sx={{mb:1}}>
+                                <strong>Your Fixed Costs (Original):</strong> R {fixedCostTotalOriginal.toFixed(2)}
+                            </Typography>
+                            <Typography variant="body1" sx={{mb:1}}>
+                                <strong>Your Fixed Costs (Planned):</strong> R {fixedCostTotalAdjusted.toFixed(2)}
+                            </Typography>
+                            <Typography variant="body1" sx={{mb:1}}>
+                                <strong>Your Product Costs (Original):</strong> R {variableCostTotalOriginal.toFixed(2)}
+                            </Typography>
+                            <Typography variant="body1" sx={{mb:1}}>
+                                <strong>Your Product Costs (Planned):</strong> R {variableCostTotalAdjusted.toFixed(2)}
+                            </Typography>
+                            <Typography variant="body1" sx={{mb:1}}>
+                                <strong>Total Other Income:</strong> R {totalOtherIncome.toFixed(2)}
+                            </Typography>
+                        </Grid>
+                        <Grid item xs={12} sm={6}>
+                            <Typography variant="body1" sx={{mb:1}}>
+                                <strong>Total Costs (Original):</strong> R {totalCostOriginal.toFixed(2)}
+                            </Typography>
+                            <Typography variant="body1" sx={{mb:1}}>
+                                <strong>Total Costs (Planned):</strong> R {totalCostAdjusted.toFixed(2)}
+                            </Typography>
+                            <Typography variant="body1" sx={{mb:1}}>
+                                <strong>Current Sales Estimate:</strong> R {originalProductsTotalSales.toFixed(2)}
+                            </Typography>
+                            <Typography variant="body1" sx={{mb:1}}>
+                                <strong>Your Planned Sales Goal:</strong> R {plannedSalesGoal.toFixed(2)}
+                            </Typography>
+                            <Typography variant="body1" sx={{mb:1}}>
+                                <strong>Sales Needed to Break Even:</strong> R {breakevenSalesNeeded.toFixed(2)}
+                            </Typography>
+                        </Grid>
+                        <Grid item xs={12} sx={{ mt: 2 }}>
+                            <Typography variant="h6">
+                                <strong>Your Profit (Original):</strong>{' '}
+                                <span style={{ color: profitOriginal < 0 ? 'red' : 'green' }}>
+                                    R {profitOriginal.toFixed(2)} ({profitMarginPercentOriginal.toFixed(1)}%)
+                                </span>
+                            </Typography>
+                            <Typography variant="h6">
+                                <strong>Your Profit (Planned):</strong>{' '}
+                                <span style={{ color: profitAdjusted < 0 ? 'red' : 'green' }}>
+                                    R {profitAdjusted.toFixed(2)} ({profitMarginPercentAdjusted.toFixed(1)}%)
+                                </span>
+                            </Typography>
+                        </Grid>
+                    </Grid>
+                </Paper>
+
+                {/* Insights Section */}
+                <Typography variant="h6" gutterBottom sx={{ mt: 4, color: 'text.primary' }}>
+                    Smart Tips for Your Budget
+                </Typography>
+                <Box sx={{ mb: 4 }}> {/* Increased margin-bottom */}
+                    {insights.map((insight, i) => (
+                        <Alert
+                            key={i}
+                            severity={insight.type === 'suggestion' ? 'info' : insight.type}
+                            sx={{ mb: 1, borderRadius: '8px' }}
+                        >
+                            <Typography variant="body2">{insight.message}</Typography>
+                        </Alert>
+                    ))}
+                </Box>
+
+                {/* Charts Section */}
+                <Typography variant="h6" gutterBottom sx={{ mt: 4, color: 'text.primary' }}>
+                    Visual Overview
+                </Typography>
+                <Grid container spacing={3} sx={{ mb: 4 }}> {/* Increased margin-bottom */}
+                    <Grid item xs={12} md={6}>
+                        <Typography variant="subtitle1" align="center" gutterBottom>
+                            How Your Money is Used (Planned)
+                        </Typography>
+                        <Paper elevation={1} sx={{ p: 2, borderRadius: '8px', height: 350, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                            <ResponsiveContainer width="100%" height="100%">
+                                <PieChart>
+                                    <Pie
+                                        data={pieData}
+                                        dataKey="value"
+                                        nameKey="name"
+                                        cx="50%"
+                                        cy="50%"
+                                        outerRadius={100}
+                                        label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                                    >
+                                        {pieData.map((entry, index) => (
+                                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                                        ))}
+                                    </Pie>
+                                    <RechartsTooltip formatter={(value) => `R${value.toFixed(2)}`} />
+                                    <Legend />
+                                </PieChart>
+                            </ResponsiveContainer>
+                        </Paper>
+                    </Grid>
+                    {fixedCostsBarData.length > 0 && (
+                        <Grid item xs={12} md={6}>
+                            <Typography variant="subtitle1" align="center" gutterBottom>
+                                Breakdown of Your Fixed Costs (Planned)
+                            </Typography>
+                            <Paper elevation={1} sx={{ p: 2, borderRadius: '8px', height: 350, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={fixedCostsBarData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                                        <CartesianGrid strokeDasharray="3 3" />
+                                        <XAxis dataKey="name" interval={0} angle={-30} textAnchor="end" height={60} />
+                                        <YAxis label={{ value: 'Amount (R)', angle: -90, position: 'insideLeft' }} />
+                                        <RechartsTooltip formatter={(value) => `R${value.toFixed(2)}`} />
+                                        <Legend />
+                                        <Bar dataKey="amount" fill="#CC7722" />
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            </Paper>
+                        </Grid>
+                    )}
+                </Grid>
+
+                {/* Export Button */}
+                <Box sx={{ textAlign: 'center', mt: 3 }}>
+                    <Button variant="contained" onClick={exportToExcel} disabled={loading} sx={{ padding: '10px 20px', fontSize: '1rem' }}>
+                        Download Budget Report (Excel)
+                    </Button>
+                </Box>
+
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 3, textAlign: 'center' }}>
+                    This tool helps you play with numbers to see how different plans affect your business profit.
+                </Typography>
+            </Card>
+        </motion.div>
+    );
+};
+
+export default BudgetTab;
