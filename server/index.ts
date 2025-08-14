@@ -77,9 +77,20 @@ if (app.get('env') === 'development') {
 }
 
 // Always serve on 5000 (API + client)
-const port = 5000;
-const host = '127.0.0.1';
+//const port = 5000;
+//const host = '127.0.0.1';
 
-server.listen({ port, host }, () => {
-  log(`serving on http://127.0.0.1:${port}`);
+// Always use Render's PORT and bind to 0.0.0.0
+const port = Number(process.env.PORT) || 5000;   // Render sets PORT
+const host = '0.0.0.0';                           // NOT 127.0.0.1
+
+// If registerRoutes(app) returns an http.Server, keep using it:
+server.listen(port, host, () => {
+  log(`serving on http://${host}:${port}`);
 });
+
+// (If registerRoutes returns the Express app instead, do:)
+// app.listen(port, host, () => {
+//   log(`serving on http://${host}:${port}`);
+// });
+
