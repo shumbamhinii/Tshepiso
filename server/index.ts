@@ -82,7 +82,7 @@ if (app.get('env') === 'development') {
 
 // Always use Render's PORT and bind to 0.0.0.0
 const port = Number(process.env.PORT) || 5000;   // Render sets PORT
-const host = '127.0.0.1';                           // NOT 127.0.0.1
+const host = '0.0.0.0';                           // NOT 127.0.0.1
 
 // If registerRoutes(app) returns an http.Server, keep using it:
 server.listen(port, host, () => {
