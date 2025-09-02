@@ -17,6 +17,7 @@ import {
   insertCostSchema,
   insertInvoiceSchema,
   insertSupplierSchema, // NEW: Import the new insertSupplierSchema
+  insertTenderSchema, // NEW: Import the new insertTenderSchema
 } from "@shared/schema";
 import { z } from "zod";
 import { sendEmail } from "./emailService"; // NEW: Import the email service
@@ -826,36 +827,146 @@ export async function registerRoutes(app: Express): Promise<Server> {
       next(error);
     }
   });
+// --- Suppliers: edit/delete individual item ---
+app.put('/api/suppliers/:id', async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ message: 'Invalid Supplier ID' });
+    }
+    // Validate the incoming data against the schema
+    const validatedData = insertSupplierSchema.partial().parse(req.body);
+    const updated = await storage.updateSupplier(id, validatedData);
+    if (!updated) {
+      return res.status(404).json({ message: 'Supplier not found' });
+    }
+    res.json(updated);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ message: 'Validation error', errors: error.errors });
+    } else {
+      next(error);
+    }
+  }
+});
 
+app.delete('/api/suppliers/:id', async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ message: 'Invalid Supplier ID' });
+    }
+    const deleted = await storage.deleteSupplier(id);
+    if (!deleted) {
+      return res.status(404).json({ message: 'Supplier not found' });
+    }
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+});
   // --- Suppliers: list all (for UI boot) ---
 app.get('/api/suppliers', async (_req, res, next) => {
   try {
-    // If your storage already has a helper:
-    if (typeof (storage as any).getAllSuppliers === 'function') {
-      const rows = await (storage as any).getAllSuppliers();
-      return res.json(rows);
-    }
-
-    // Fallback: direct SQL via your storage.exec (adjust if your storage uses another method)
-    const rows = await (storage as any).exec?.(
-      `SELECT
-         id,
-         supplier_name AS "supplierName",
-         sku,
-         product_name AS "productName",
-         unit,
-         price,
-         created_at AS "createdAt"
-       FROM suppliers
-       ORDER BY id DESC;`
-    );
-
-    res.json(rows ?? []);
+    const suppliers = await storage.getAllSuppliers();
+    res.json(suppliers);
   } catch (err) {
     next(err);
   }
 });
 
+// --- Suppliers: search (name/SKU/supplier), with paging ---
+app.get('/api/suppliers/search', async (req, res, next) => {
+  try {
+    const q = String(req.query.q ?? '').trim();
+    const supplier = String(req.query.supplier ?? '').trim();
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? '25')) || 25));
+    const offset = Math.max(0, parseInt(String(req.query.offset ?? '0')) || 0);
+
+    // Using storage.getAllSuppliers and filtering in memory for simplicity as drizzle-orm's
+    // advanced filtering/ordering for complex queries can require extensive setup.
+    // For large datasets, direct database query with appropriate WHERE/LIKE/LIMIT/OFFSET would be more efficient.
+    const all = await storage.getAllSuppliers(); // Fetch all and filter in memory
+    const ql = q.toLowerCase();
+    const filtered = (all || []).filter((r: any) => {
+      if (supplier && supplier.toLowerCase() !== 'all' && r.supplierName !== supplier) return false;
+      if (!ql) return true;
+      const hay = [r.productName, r.sku, r.supplierName, r.unit].filter(Boolean).join(' ').toLowerCase();
+      return hay.includes(ql);
+    });
+
+    // Apply sorting in memory, as orderBy on non-indexed columns might cause issues
+    filtered.sort((a: any, b: any) => {
+      const nameA = (a.productName || '').toLowerCase();
+      const nameB = (b.productName || '').toLowerCase();
+      if (nameA < nameB) return -1;
+      if (nameA > nameB) return 1;
+      return (a.price || 0) - (b.price || 0); // Then by price
+    });
+
+    res.json(filtered.slice(offset, offset + limit));
+  } catch (err) {
+    next(err);
+  }
+});
+
+ // --- Existing Snapshot Products routes ---
+  app.get('/api/snapshots/:snapshotId/products', async (req, res, next) => {
+    try {
+      const snapshotId = parseInt(req.params.snapshotId);
+      if (isNaN(snapshotId)) {
+        return res.status(400).json({ message: 'Invalid Snapshot ID' });
+      }
+      // This calls storage.getSnapshotProductsBySnapshotId which should now select 'price'
+      const products = await storage.getSnapshotProductsBySnapshotId(snapshotId);
+      res.json(products);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/snapshots/:snapshotId/products', async (req, res, next) => {
+    try {
+      const snapshotId = parseInt(req.params.snapshotId);
+      if (isNaN(snapshotId)) {
+        return res.status(400).json({ message: 'Invalid Snapshot ID' });
+      }
+      // Ensure that insertSnapshotProductSchema validation includes 'price'
+      const validatedData = insertSnapshotProductSchema.parse({
+        ...req.body,
+        snapshotId: snapshotId,
+      });
+      // This calls storage.createSnapshotProduct which should now save 'price'
+      const product = await storage.createSnapshotProduct(validatedData);
+      res.status(201).json(product);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        // If 'price' is missing or invalid in the schema, Zod will catch it here
+        res.status(400).json({ message: 'Validation error for snapshot product', errors: error.errors });
+      } else {
+        next(error);
+      }
+    }
+  });
+
+  app.put('/api/snapshot-products/:id', async (req, res, next) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ message: 'Invalid Snapshot Product ID' });
+      }
+      // Ensure that insertSnapshotProductSchema.partial() validation includes 'price'
+      const validatedData = insertSnapshotProductSchema.partial().parse(req.body);
+      const product = await storage.updateSnapshotProduct(id, validatedData);
+      res.json(product);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ message: 'Validation error for snapshot product update', errors: error.errors });
+      } else {
+        next(error);
+      }
+    }
+  });
 
 // NEW: Route to import supplier data
 app.post('/api/suppliers/import', async (req, res, next) => {
@@ -897,6 +1008,80 @@ app.post('/api/suppliers/import', async (req, res, next) => {
   }
 });
 
+// --- NEW: Tender Routes ---
+app.get('/api/tenders', async (req, res, next) => {
+  try {
+    const tenders = await storage.getAllTenders();
+    res.json(tenders);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/tenders/:id', async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ message: 'Invalid Tender ID' });
+    }
+    const tender = await storage.getTender(id);
+    if (!tender) {
+      return res.status(404).json({ message: 'Tender not found' });
+    }
+    res.json(tender);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/tenders', async (req, res, next) => {
+  try {
+    const validatedData = insertTenderSchema.parse(req.body);
+    const tender = await storage.createTender(validatedData);
+    res.status(201).json(tender);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ message: 'Validation error', errors: error.errors });
+    } else {
+      next(error);
+    }
+  }
+});
+
+app.put('/api/tenders/:id', async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ message: 'Invalid Tender ID' });
+    }
+    const validatedData = insertTenderSchema.partial().parse(req.body);
+    const tender = await storage.updateTender(id, validatedData);
+    res.json(tender);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ message: 'Validation error', errors: error.errors });
+    } else {
+      next(error);
+    }
+  }
+});
+
+app.delete('/api/tenders/:id', async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ message: 'Invalid Tender ID' });
+    }
+    const deleted = await storage.deleteTender(id);
+    if (deleted) {
+      res.status(204).send();
+    } else {
+      res.status(404).json({ message: 'Tender not found' });
+    }
+  } catch (error) {
+    next(error);
+  }
+});
 
   const httpServer = createServer(app);
   return httpServer;

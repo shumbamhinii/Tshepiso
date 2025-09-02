@@ -18,9 +18,11 @@ import {
   BarChart3, // Icon for Financial Reports
   ChevronDown, // Icon for dropdown/expandable
   ChevronUp,
-  LayoutDashboard,   // Icon for dropdown/collapsible
+  LayoutDashboard,
+  BoxSelectIcon,   // Icon for dropdown/collapsible
 } from "lucide-react";
 import { FileSpreadsheet } from "lucide-react";
+import SuppliersTab from "./SuppliersTab";
 // Removed: import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"; // No longer needed for this style
 
 interface SidebarNavigationProps {
@@ -35,23 +37,15 @@ interface SidebarNavigationProps {
 const tabs = [
   {id: 'dashboard' as PricingTab, label: 'Dashboard', icon: LayoutDashboard},
   { id: 'setup' as PricingTab, label: 'Setup', icon: Settings },
-  { id: 'products' as PricingTab, label: 'Products', icon: Package },
-  { id: 'results' as PricingTab, label: 'Pricing', icon: TrendingUp },
+  { id: 'products' as PricingTab, label: 'Pricing', icon: Package },
+  //{ id: 'results' as PricingTab, label: 'Pricing', icon: TrendingUp },
+  { id: 'suppliers' as PricingTab, label: 'Suppliers', icon: BoxSelectIcon  },
   { id: 'scenarios' as PricingTab, label: 'What-If Scenarios', icon: FlaskConical },
   { id: 'competitors' as PricingTab, label: 'Competitor Pricing', icon: Users },
   { id: 'budget' as PricingTab, label: 'Budget', icon: Wallet },
   { id: 'snapshots' as PricingTab, label: 'Snapshot Manager', icon: Camera },
   { id: 'projects' as PricingTab, label: 'Projects', icon: Folder },
-  {
-    id: 'financial-management' as PricingTab,
-    label: 'Financials',
-    icon: DollarSign,
-    subTabs: [ // Define sub-tabs for the expandable menu
-      { id: 'transactions' as FinancialSubTab, label: 'Transactions', icon: Banknote },
-      { id: 'import' as FinancialSubTab, label: 'Import Data', icon: FileInput },
-      { id: 'financials-reports' as FinancialSubTab, label: 'Financial Reports', icon: BarChart3 },
-    ]
-  },
+
   { id: 'tenders' as PricingTab, label: 'Tender Management', icon: FileSpreadsheet },
   { id: 'pricingchat' as PricingTab, label: 'Pricing Chat', icon: BrainIcon },
 ];
@@ -64,7 +58,7 @@ export default function SidebarNavigation({
   isSaving,
   activeFinancialSubTab
 }: SidebarNavigationProps) {
-  console.log("SidebarNavigation: onBack prop value:", onBack);
+  //console.log("SidebarNavigation: onBack prop value:", onBack);
 
   return (
     <aside className="pricing-sidebar">

@@ -24,6 +24,8 @@ export interface PricingProduct { // This type now specifically represents produ
   profitMargin?: number;
   // Added for consistency with `calculatePricing` and `handleLoadSnapshot`
   calculationMethod?: 'cost-plus' | 'value-based' | 'competitive' | 'dynamic';
+  // NEW: Field to hold a suggested price from a calculation, separate from the manual price input
+  suggestedPrice?: number;
 }
 
 // --- New type for master_products (if you use it on the frontend) ---
@@ -116,9 +118,11 @@ export type PricingTab =
   | 'snapshots'
   | 'projects'
   | 'financial-management'
-  | 'tenders';    
+  | 'tenders'
+  | 'dashboard'
+  | "suppliers";
   
-  // Tender-related types
+// Tender-related types
 export interface SupplierRow {
   supplierName: string;
   sku?: string;
@@ -133,7 +137,7 @@ export interface TenderPricingState {
   supplierRows: SupplierRow[];
   tenderItems: TenderItem[];
   pricingMode: 'margin' | 'targetProfit';
-  targetMarginPct: number;     // e.g., 25 means 25%
+  targetMarginPct: number;    // e.g., 25 means 25%
   targetProfitAbsolute: number; // currency
 }
 
@@ -170,7 +174,7 @@ export type TenderItem = {
 
   // NEW (milestone 1)
   supplierOptions?: TenderSupplierOption[];
-  chosenSourceId?: string;   // selected supplier item
+  chosenSourceId?: string;  // selected supplier item
 };
 
 // types/pricing.ts (or local to ProductsTab)
@@ -192,8 +196,8 @@ export interface SupplierProductRow {
   lastUpdated?: string;
 }
 
-export interface CatalogProduct {        // merged across suppliers by key (sku or name)
-  key: string;                           // sku preferred, else normalized name
+export interface CatalogProduct {          // merged across suppliers by key (sku or name)
+  key: string;                          // sku preferred, else normalized name
   name: string;
   pack?: string;
   options: Array<{
@@ -203,7 +207,6 @@ export interface CatalogProduct {        // merged across suppliers by key (sku 
     lastUpdated?: string;
   }>;
   chosenSupplierId?: SupplierId;         // if user overrides “best”
-  qty: number;                           // user input
-  included: boolean;                     // quick toggle
+  qty: number;                          // user input
+  included: boolean;                    // quick toggle
 }
-

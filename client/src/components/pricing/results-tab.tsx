@@ -1,381 +1,417 @@
+// components/pricing/results-tab.tsx
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { Download, CheckCircle, BarChart2, Lightbulb, TrendingDown } from "lucide-react";
-import type { PricingResults } from "@/types/pricing";
+import { Download, CheckCircle, BarChart2, Lightbulb, TrendingDown, CircleDollarSign, Factory, LineChart, PieChart } from "lucide-react";
+import type { PricingResults, PricingProduct } from "@/types/pricing";
 import HighchartsWrapper from "@/lib/HighchartsWrapper";
 
 interface ResultsTabProps {
-  results: PricingResults | null;
-  onApplyPrices: () => void;
-  onExportPdf: () => void;
+  results: PricingResults | null;
+  products: PricingProduct[]; // Add this prop to get current products
+  onApplyPrices: () => void;
+  onExportPdf: () => void;
 }
 
-export default function ResultsTab({ results, onApplyPrices, onExportPdf }: ResultsTabProps) {
-  if (!results) {
-    return (
-      <div className="slide-in">
-        <div className="bg-card border-b border-border px-8 py-6">
-          <h2 className="text-2xl font-bold text-card-foreground">Pricing Results</h2>
-          <p className="text-muted-foreground mt-1">Run a calculation to see your pricing outcomes.</p>
-        </div>
-        <div className="p-8 text-center text-muted-foreground">
-          No results to display. Please go to the Setup tab and run a calculation.
-        </div>
-      </div>
-    );
-  }
+export default function ResultsTab({ results, products, onApplyPrices, onExportPdf }: ResultsTabProps) {
+  if (!results) {
+    return (
+      <div className="slide-in">
+        <div className="bg-card border-b border-border px-8 py-6">
+          <h2 className="text-2xl font-bold text-card-foreground">Pricing Results</h2>
+          <p className="text-muted-foreground mt-1">Run a calculation to see your pricing outcomes.</p>
+        </div>
+        <div className="p-8 text-center text-muted-foreground">
+          No results to display. Please go to the Setup tab and run a calculation.
+        </div>
+      </div>
+    );
+  }
 
-  const { actualCost, totalRevenue, calculatedProfit, calculatedProducts } = results;
+  // ---------- helpers ----------
+  const fmtR = (n: number, max = 2) =>
+    `R${(n ?? 0).toLocaleString(undefined, { maximumFractionDigits: max })}`;
 
-  // Inventory (product purchase) cost = Σ(costPerUnit * onHand)
-  const inventoryCost = calculatedProducts.reduce((sum, p) => {
-    const cost = typeof p.costPerUnit === "string" ? parseFloat(p.costPerUnit as any) : (p.costPerUnit as number) || 0;
-    const units = Number(p.expectedUnits) || 0;
-    return sum + cost * units;
-  }, 0);
+  // ------------- derived -------------
+  // Use the current products array to calculate KPIs
+  const kpi = {
+    revenue: results.totalRevenue || 0,
+    costFixed: results.actualCost || 0,
+    costGoods: (products || []).reduce((sum, p) => sum + (p.costPerUnit || 0) * (p.expectedUnits || 0), 0),
+    profit: results.calculatedProfit || ((results.totalRevenue || 0) - (results.actualCost || 0) - 
+      (products || []).reduce((sum, p) => sum + (p.costPerUnit || 0) * (p.expectedUnits || 0), 0)),
+    marginPct: (results.totalRevenue || 0) > 0 ? 
+      (((results.totalRevenue || 0) - (results.actualCost || 0) - 
+        (products || []).reduce((sum, p) => sum + (p.costPerUnit || 0) * (p.expectedUnits || 0), 0)) / 
+        (results.totalRevenue || 1)) * 100 : 0,
+    unitCount: (products || []).reduce((sum, p) => sum + (p.expectedUnits || 0), 0),
+  };
 
-  // Combined costs for charts (fixed + inventory)
-  const combinedCosts = (Number(actualCost) || 0) + inventoryCost;
+  // Product breakdown for charts
+  const productBreaks = {
+    list: (products || []).map(p => ({
+      id: p.id,
+      name: p.name,
+      revenue: p.price ? p.price * (p.expectedUnits || 0) : 0,
+      margin: p.price && p.costPerUnit ? ((p.price - p.costPerUnit) / p.price) * 100 : 0,
+      profit: p.price ? p.price * (p.expectedUnits || 0) - (p.costPerUnit || 0) * (p.expectedUnits || 0) : 0,
+    })),
+    topRevenue: [...(products || []).map(p => ({
+      id: p.id,
+      name: p.name,
+      revenue: p.price ? p.price * (p.expectedUnits || 0) : 0,
+      margin: p.price && p.costPerUnit ? ((p.price - p.costPerUnit) / p.price) * 100 : 0,
+      profit: p.price ? p.price * (p.expectedUnits || 0) - (p.costPerUnit || 0) * (p.expectedUnits || 0) : 0,
+    }))].sort((a, b) => b.revenue - a.revenue).slice(0, 10)
+  };
 
-  // Summary inputs for the treemap
-  const summaryCategories = ["Revenue", "Costs", "Profit"];
-  const summaryValues = [totalRevenue || 0, combinedCosts, calculatedProfit || 0];
-  const summaryColors = ["#22C55E", "#EF4444", "#3B82F6"];
-  const isSummaryDataEmpty = summaryValues.every((v) => !v || v === 0);
+  // ------------- Highcharts options -------------
 
-  // Product Revenue data for packed-bubble
-  const productRevenueData = calculatedProducts.map((p) => ({
-    name: p.name,
-    value: p.totalRevenue,
-  }));
-
-  // Units to break even
-  const totalOnHandUnits = calculatedProducts.reduce((s, p) => s + (Number(p.expectedUnits) || 0), 0);
-  const unitsToBreakEven = totalRevenue > 0 ? (combinedCosts * totalOnHandUnits) / totalRevenue : 0;
-
-  /* -------------------- Highcharts options -------------------- */
-
-  // Treemap for Revenue / Costs / Profit
-const treemapOptions: Highcharts.Options = {
-  chart: { type: "treemap", height: 320 },
-  title: { text: null },
-  credits: { enabled: false },
-  series: [
-    {
+  // Treemap: Revenue / Costs / Profit
+  const treemapOptions: Highcharts.Options = {
+    chart: { type: "treemap", height: 320, backgroundColor: "transparent" },
+    title: { text: null },
+    series: [{
       type: "treemap",
       layoutAlgorithm: "squarified",
-      data: summaryValues.map((v, i) => ({
-        name: summaryCategories[i] || "N/A",
-        value: Number(v) || 0,
-        color: summaryColors[i],
-        colorValue: i,
-      })),
-      tooltip: {
-        pointFormatter() {
-          const v = Number(this.value) || 0;
-          return `<b>${this.name}:</b> R${v.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
-        },
-      },
+      data: [
+        { name: "Revenue", value: kpi.revenue, color: "#22C55E" },
+        { name: "Fixed Costs", value: kpi.costFixed, color: "#EF4444" },
+        { name: "Product Costs", value: kpi.costGoods, color: "#F97316" },
+        { name: "Profit", value: Math.max(kpi.profit, 0), color: "#3B82F6" },
+      ],
       dataLabels: {
         enabled: true,
         formatter() {
-          const v = Number(this.point.value) || 0;
-          const n = this.point.name || "N/A";
-          return `<b>${n}</b><br>R${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+          const v = (this.point as any).value || 0;
+          return `<b>${this.key}</b><br>${fmtR(v)}`;
         },
         style: { textOutline: "none", fontWeight: "bold" },
       },
+      tooltip: {
+        useHTML: true,
+        pointFormatter() {
+          return `<b>${this.name}:</b> ${fmtR(this.value as number)}`;
+        }
+      }
+    }]
+  };
+
+  // Packed Bubble: Product revenue contribution
+  const packedBubbleOptions: Highcharts.Options = {
+    chart: { type: "packedbubble", height: 320, backgroundColor: "transparent" },
+    title: { text: null },
+    tooltip: { useHTML: true, pointFormat: "<b>{point.name}:</b> {point.z:,.0f}" },
+    plotOptions: {
+      packedbubble: {
+        minSize: "30%",
+        maxSize: "120%",
+        zMin: 0,
+        zMax: Math.max(1, ...productBreaks.list.map((d) => d.revenue || 0)),
+        layoutAlgorithm: { gravitationalConstant: 0.06, parentNodeLimit: true },
+        dataLabels: {
+          enabled: true,
+          formatter() {
+            const z = (this.point as any).z || 0;
+            const zMax = (packedBubbleOptions.plotOptions as any).packedbubble.zMax || 1;
+            return z > 0.09 * zMax ? this.point.name : "";
+          },
+          style: { textOutline: "none", fontSize: "11px" }
+        }
+      }
     },
-  ],
-};
+    series: [{
+      type: "packedbubble",
+      name: "Revenue",
+      data: (products || []).map(p => ({ name: p.name, value: p.price ? p.price * (p.expectedUnits || 0) : 0, z: p.price ? p.price * (p.expectedUnits || 0) : 0 }))
+    }]
+  };
 
+  // Solid Gauge: Overall margin
+  const gaugeOptions: Highcharts.Options = {
+    chart: { type: "solidgauge", height: 260, backgroundColor: "transparent" },
+    title: { text: null },
+    tooltip: { enabled: false },
+    pane: {
+      startAngle: -90, endAngle: 90,
+      background: [{ outerRadius: "100%", innerRadius: "60%", shape: "arc" }]
+    },
+    yAxis: {
+      min: -50, max: 60,
+      stops: [
+        [0.2, "#EF4444"], // red
+        [0.5, "#F59E0B"], // amber
+        [0.8, "#22C55E"], // green
+      ],
+      lineWidth: 0, tickWidth: 0, minorTickInterval: 0,
+      labels: { enabled: false }
+    },
+    plotOptions: {
+      solidgauge: {
+        dataLabels: {
+          y: -10,
+          borderWidth: 0,
+          useHTML: true,
+          format: `<div style="text-align:center">
+                     <div style="font-size:22px;font-weight:700">{y:.1f}%</div>
+                     <div style="font-size:12px;color:#888">Overall Margin</div>
+                   </div>`
+        }
+      }
+    },
+    series: [{ type: "solidgauge", data: [{ y: kpi.marginPct }] }]
+  };
 
-  // Packed bubble for product revenue distribution
-  const maxRevenue = Math.max(...productRevenueData.map((d) => d.value), 1);
-  const packedBubbleOptions: Highcharts.Options = {
-    chart: { type: "packedbubble", height: 320 },
-    title: { text: null },
-    credits: { enabled: false },
-    tooltip: {
-      useHTML: true,
-      pointFormat: "<b>{point.name}:</b> R{point.value:,.2f}",
-    },
-    plotOptions: {
-      packedbubble: {
-        minSize: "30%",
-        maxSize: "120%",
-        zMin: 0,
-        zMax: maxRevenue,
-        layoutAlgorithm: {
-          gravitationalConstant: 0.06,
-          splitSeries: false,
-          parentNodeLimit: true,
-        },
-        dataLabels: {
-          enabled: true,
-          formatter() {
-            // Show a label only if bubble is “large enough”
-            const v = (this.point as any).value || 0;
-            return v >= 0.06 * maxRevenue ? this.point.name : "";
-          },
-          style: { textOutline: "none", fontWeight: "normal" },
-        },
-      },
-    },
-    series: [
-      {
-        type: "packedbubble",
-        name: "Revenue",
-        data: productRevenueData,
-      },
-    ],
-  };
+  // Column: Top products by revenue
+  const topProductsColumn: Highcharts.Options = {
+    chart: { type: "column", height: 320, backgroundColor: "transparent" },
+    title: { text: null },
+    xAxis: {
+      categories: productBreaks.topRevenue.map(p => p.name),
+      labels: { style: { fontSize: "11px" } }
+    },
+    yAxis: {
+      title: { text: null },
+      labels: { formatter() { return fmtR(this.value as number, 0); } }
+    },
+    legend: { enabled: false },
+    tooltip: {
+      pointFormatter() { return `<b>${fmtR(this.y as number)}</b>`; }
+    },
+    series: [{
+      type: "column",
+      data: productBreaks.topRevenue.map(p => p.revenue),
+      color: "#3B82F6",
+    }]
+  };
 
-  /* -------------------- Insights -------------------- */
-  const getInsights = () => {
-    const insights: string[] = [];
-    if (calculatedProfit > 0) {
-      insights.push(
-        `Your overall pricing strategy is profitable, yielding a net profit of R${calculatedProfit.toFixed(2)}.`
-      );
-    } else {
-      insights.push(
-        `Your current pricing strategy is resulting in a loss of R${Math.abs(calculatedProfit).toFixed(
-          2
-        )}. Consider reviewing your costs or increasing prices.`
-      );
-    }
+  // Product table data
+  const productTableData = (products || []).map(p => ({
+    id: p.id,
+    name: p.name,
+    costPerUnit: p.costPerUnit,
+    expectedUnits: p.expectedUnits,
+    price: p.price,
+    totalRevenue: p.price ? p.price * (p.expectedUnits || 0) : 0,
+    profitPerUnit: p.price ? p.price - p.costPerUnit : 0,
+    profitMargin: p.price && p.costPerUnit ? ((p.price - p.costPerUnit) / p.price) * 100 : 0
+  }));
 
-    if (calculatedProducts && calculatedProducts.length > 0) {
-      const highestRevenue = calculatedProducts.reduce((prev, cur) =>
-        prev.totalRevenue > cur.totalRevenue ? prev : cur
-      );
-      insights.push(
-        `"${highestRevenue.name}" is your top revenue generator, contributing R${highestRevenue.totalRevenue.toFixed(
-          2
-        )}.`
-      );
+  /* -------------------- UI -------------------- */
+  return (
+    <div className="slide-in">
+      {/* Header */}
+      <div className="bg-card border-b border-border px-6 py-5">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold text-card-foreground">Pricing Results</h2>
+            <p className="text-muted-foreground mt-1">Review your calculated prices and profitability.</p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={onApplyPrices}>
+              <CheckCircle className="w-4 h-4 mr-2" />
+              Apply Prices
+            </Button>
+            <Button variant="outline" onClick={onExportPdf}>
+              <Download className="w-4 h-4 mr-2" />
+              Export PDF
+            </Button>
+          </div>
+        </div>
+      </div>
 
-      const lowestMargin = calculatedProducts.reduce((prev, cur) =>
-        prev.profitMargin < cur.profitMargin ? prev : cur
-      );
-      if (lowestMargin.profitMargin < 10) {
-        insights.push(
-          `"${lowestMargin.name}" has a low profit margin of ${lowestMargin.profitMargin.toFixed(
-            2
-          )}%. Investigate ways to reduce its cost or increase its price.`
-        );
-      } else {
-        insights.push(
-          `Your products generally maintain healthy margins. The lowest is "${lowestMargin.name}" at ${lowestMargin.profitMargin.toFixed(
-            2
-          )}%.`
-        );
-      }
-    } else {
-      insights.push("No product data available to generate detailed insights.");
-    }
+      {/* KPI Cards */}
+      <div className="px-6 pt-6">
+        <div className="max-w-7xl mx-auto flex flex-nowrap gap-4 overflow-x-auto pb-4">
+          <Card className="pricing-summary-card min-w-[240px]">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <CircleDollarSign className="w-4 h-4 text-green-600" />
+                Total Revenue
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{fmtR(kpi.revenue)}</div>
+            </CardContent>
+          </Card>
 
-    if (unitsToBreakEven > 0) {
-      if (unitsToBreakEven > totalOnHandUnits) {
-        insights.push(
-          `**Critical Insight:** You need to sell approximately ${unitsToBreakEven.toFixed(
-            0
-          )} units to break even, which is higher than your current on‑hand total of ${totalOnHandUnits} units.`
-        );
-      } else {
-        insights.push(
-          `You need to sell approximately ${unitsToBreakEven.toFixed(
-            0
-          )} units to break even. This is within your current on‑hand total of ${totalOnHandUnits} units.`
-        );
-      }
-    } else if (combinedCosts > 0 && totalRevenue === 0) {
-      insights.push("No revenue generated yet, so breakeven units cannot be calculated.");
-    }
+          <Card className="pricing-summary-card min-w-[240px]">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <Factory className="w-4 h-4 text-orange-500" />
+                Product Costs
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{fmtR(kpi.costGoods)}</div>
+            </CardContent>
+          </Card>
 
-    return insights;
-  };
+          <Card className="pricing-summary-card min-w-[240px]">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <Factory className="w-4 h-4 text-red-500" />
+                Fixed Costs
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{fmtR(kpi.costFixed)}</div>
+            </CardContent>
+          </Card>
 
-  /* -------------------- UI -------------------- */
-  return (
-    <div className="slide-in">
-      {/* Header */}
-      <div className="bg-card border-b border-border px-8 py-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl font-bold text-card-foreground">Pricing Results</h2>
-            <p className="text-muted-foreground mt-1">Review your calculated prices and profitability.</p>
-          </div>
-          <div className="flex items-center space-x-3">
-            <Button variant="outline" size="sm" onClick={onApplyPrices}>
-              <CheckCircle className="w-4 h-4 mr-2" />
-              Apply Prices
-            </Button>
-            <Button variant="outline" size="sm" onClick={onExportPdf}>
-              <Download className="w-4 h-4 mr-2" />
-              Export PDF
-            </Button>
-          </div>
-        </div>
-      </div>
+          <Card className="pricing-summary-card min-w-[240px]">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <LineChart className="w-4 h-4 text-blue-600" />
+                Net Profit
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className={`text-2xl font-bold ${kpi.profit >= 0 ? "text-foreground" : "text-destructive"}`}>
+                {fmtR(kpi.profit)}
+              </div>
+            </CardContent>
+          </Card>
 
-      <div className="p-8">
-        <div className="max-w-6xl mx-auto space-y-8">
-          {/* KPI cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {/* Revenue */}
-            <Card className="pricing-summary-card">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Revenue</CardTitle>
-                <span className="text-primary-foreground bg-primary rounded-full p-1">R</span>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">R{(totalRevenue || 0).toFixed(2)}</div>
-                <p className="text-xs text-muted-foreground mt-1">Based on calculated prices</p>
-              </CardContent>
-            </Card>
+          <Card className="pricing-summary-card min-w-[240px]">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <PieChart className="w-4 h-4 text-emerald-600" />
+                Margin %
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{kpi.marginPct.toFixed(1)}%</div>
+            </CardContent>
+          </Card>
 
-            {/* Actual (Fixed) Costs */}
-            <Card className="pricing-summary-card">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Actual Costs (Fixed)</CardTitle>
-                <span className="text-destructive-foreground bg-destructive rounded-full p-1">R</span>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">R{(Number(actualCost) || 0).toFixed(2)}</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Fixed costs from Setup
-                </p>
-              </CardContent>
-            </Card>
+          <Card className="pricing-summary-card min-w-[240px]">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <BarChart2 className="w-4 h-4 text-indigo-600" />
+                Units (Total)
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{(kpi.unitCount || 0).toLocaleString()}</div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
 
-            {/* Inventory Cost */}
-            <Card className="pricing-summary-card">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Inventory Cost</CardTitle>
-                <span className="text-destructive-foreground bg-destructive rounded-full p-1">R</span>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">R{inventoryCost.toFixed(2)}</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Sum of on‑hand × cost per unit
-                </p>
-              </CardContent>
-            </Card>
+      {/* Product table */}
+      <div className="px-6 py-6">
+        <div className="max-w-7xl mx-auto">
+          <Card className="pricing-table-section">
+            <CardHeader>
+              <CardTitle>Product Pricing Breakdown</CardTitle>
+              <CardDescription>Detailed pricing and profitability for each product.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto rounded-md border">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-muted/50 sticky top-0">
+                    <tr className="text-left">
+                      <th className="px-3 py-2">Product Name</th>
+                      <th className="px-3 py-2">Cost / Unit</th>
+                      <th className="px-3 py-2">On‑hand</th>
+                      <th className="px-3 py-2">Suggested Price</th>
+                      <th className="px-3 py-2">Total Revenue</th>
+                      <th className="px-3 py-2">Profit / Unit</th>
+                      <th className="px-3 py-2">Profit Margin</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {productTableData.map((p) => (
+                      <tr key={p.id} className="border-t hover:bg-muted/40">
+                        <td className="px-3 py-2 font-medium">{p.name}</td>
+                        <td className="px-3 py-2">{fmtR(p.costPerUnit)}</td>
+                        <td className="px-3 py-2">{p.expectedUnits}</td>
+                        <td className="px-3 py-2">{fmtR(p.price)}</td>
+                        <td className="px-3 py-2">{fmtR(p.totalRevenue)}</td>
+                        <td className="px-3 py-2">{fmtR(p.profitPerUnit)}</td>
+                        <td className="px-3 py-2">
+                          {isFinite(p.profitMargin) ? `${p.profitMargin.toFixed(2)}%` : "-"}
+                        </td>
+                      </tr>
+                    ))}
+                    {productTableData.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
+                          No products to display.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
 
-            {/* Break-even */}
-            <Card className="pricing-summary-card">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Units to Break Even</CardTitle>
-                <span className="text-warning-foreground bg-warning rounded-full p-1">
-                  <TrendingDown className="h-4 w-4" />
-                </span>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{unitsToBreakEven.toFixed(0)} units</div>
-                <p className="text-xs text-muted-foreground mt-1">Based on combined costs</p>
-              </CardContent>
-            </Card>
-          </div>
+      {/* Charts */}
+      <div className="px-6 py-6">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Card className="pricing-chart-section">
+            <CardHeader>
+              <CardTitle className="text-lg">Financial Mix</CardTitle>
+              <CardDescription>Compare revenue, fixed costs, product costs and profit.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {(kpi.revenue + kpi.costFixed + kpi.costGoods) === 0 ? (
+                <div className="h-[320px] flex items-center justify-center text-muted-foreground">
+                  No data to plot.
+                </div>
+              ) : (
+                <HighchartsWrapper options={treemapOptions} />
+              )}
+            </CardContent>
+          </Card>
 
-          {/* Product table */}
-          <Card className="pricing-table-section">
-            <CardHeader>
-              <CardTitle>Product Pricing Breakdown</CardTitle>
-              <CardDescription>Detailed pricing and profitability for each product.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Product Name</TableHead>
-                    <TableHead>Cost Per Unit</TableHead>
-                    <TableHead>On‑hand</TableHead>
-                    <TableHead>Suggested Price</TableHead>
-                    <TableHead>Total Revenue</TableHead>
-                    <TableHead>Profit Per Unit</TableHead>
-                    <TableHead>Profit Margin</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {calculatedProducts.map((p) => (
-                    <TableRow key={p.id}>
-                      <TableCell className="font-medium">{p.name}</TableCell>
-                      <TableCell>
-                        R{(
-                          typeof p.costPerUnit === "string"
-                            ? parseFloat(p.costPerUnit as any) || 0
-                            : (p.costPerUnit as number) || 0
-                        ).toFixed(2)}
-                      </TableCell>
-                      <TableCell>{Number(p.expectedUnits) || 0}</TableCell>
-                      <TableCell>R{p.price.toFixed(2)}</TableCell>
-                      <TableCell>R{p.totalRevenue.toFixed(2)}</TableCell>
-                      <TableCell>R{p.profitPerUnit.toFixed(2)}</TableCell>
-                      <TableCell>{p.profitMargin.toFixed(2)}%</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+          <Card className="pricing-chart-section">
+            <CardHeader>
+              <CardTitle className="text-lg">Overall Margin</CardTitle>
+              <CardDescription>Solid gauge of current overall margin %.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <HighchartsWrapper options={gaugeOptions} />
+            </CardContent>
+          </Card>
 
-          {/* Charts */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card className="pricing-chart-section">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <BarChart2 className="w-5 h-5" />
-                  Overall Financials
-                </CardTitle>
-                <CardDescription>Revenue, combined costs, and profit.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {isSummaryDataEmpty ? (
-                  <div className="text-center text-muted-foreground h-[320px] flex items-center justify-center">
-                    No financial summary data available.
-                  </div>
-                ) : (
-                  <HighchartsWrapper options={treemapOptions} />
-                )}
-              </CardContent>
-            </Card>
+          <Card className="pricing-chart-section">
+            <CardHeader>
+              <CardTitle className="text-lg">Product Revenue Distribution</CardTitle>
+              <CardDescription>Relative contribution by product (bubble size = revenue).</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {(products?.length ?? 0) === 0 ? (
+                <div className="h-[320px] flex items-center justify-center text-muted-foreground">
+                  No products to plot.
+                </div>
+              ) : (
+                <HighchartsWrapper options={packedBubbleOptions} />
+              )}
+            </CardContent>
+          </Card>
 
-            <Card className="pricing-chart-section">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <BarChart2 className="w-5 h-5" />
-                  Product Revenue Distribution
-                </CardTitle>
-                <CardDescription>Relative contribution (bubble size = revenue).</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <HighchartsWrapper options={packedBubbleOptions} />
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Insights */}
-          <Card className="pricing-insights-section">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Lightbulb className="w-5 h-5 text-yellow-500" />
-                Key Insights
-              </CardTitle>
-              <CardDescription>Actionable insights derived from your pricing results.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ul className="list-disc pl-5 space-y-2 text-muted-foreground">
-                {getInsights().map((insight, i) => (
-                  <li key={i}>{insight}</li>
-                ))}
-              </ul>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    </div>
-  );
+          <Card className="pricing-chart-section">
+            <CardHeader>
+              <CardTitle className="text-lg">Top Products by Revenue</CardTitle>
+              <CardDescription>Your best sellers (top 10).</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {productBreaks.topRevenue.length === 0 ? (
+                <div className="h-[320px] flex items-center justify-center text-muted-foreground">
+                  No products to plot.
+                </div>
+              ) : (
+                <HighchartsWrapper options={topProductsColumn} />
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
 }

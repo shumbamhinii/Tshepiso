@@ -1,5 +1,5 @@
 // src/components/pricing/TenderManagementTab.tsx
-import React, { useMemo, useRef, useState, useEffect } from "react";
+import React, { useMemo, useRef, useState, useEffect, useCallback } from "react";
 import Fuse from "fuse.js";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,29 +7,16 @@ import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { Download, Calculator, Trash2, Save, RefreshCw, X, MoreHorizontal } from "lucide-react";
-import type { PricingProduct } from "@/types/pricing";
-import type {
-  SupplierRow, TenderItem, TenderPricingState, CatalogItem, TenderSupplierOption,
-} from "@/types/pricing";
+import type { PricingProduct, TenderItem, TenderPricingState, TenderSupplierOption } from "@/types/pricing";
+// Assuming you have a type for the API fetched supplier data, e.g., 'SupplierRow' from SuppliersTab.tsx
+import type { SupplierRow, CatalogItem, Tender } from "@/types/pricing"; // Import Tender type from shared schema
+// Removed SupplierManagerPanel and AllCatalogsView imports as they are no longer rendered here
 
-// optional: if you have shadcn dropdown installed, uncomment these 5 lines and use it below
-// import {
-//   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
-//   DropdownMenuItem, DropdownMenuSeparator
-// } from "@/components/ui/dropdown-menu";
-
-import SupplierManagerPanel from "./SupplierManagerPanel";
-import AllCatalogsView from "./AllCatalogsView";
-import {
-  loadCatalogs, saveCatalogs, listTenders, saveTender as storageSaveTender,
-  getTender, deleteTender as storageDeleteTender, uid as storageUid,
-} from "@/lib/tender-storage";
-import type { StoredCatalogs, StoredTender } from "@/lib/tender-storage";
 
 /* ------------------------------ utils ------------------------------ */
 type Props = { products: PricingProduct[]; defaultMarginPct?: number; onUseMargin?: (pct: number) => void; };
-type EditableSupplierRow = SupplierRow & { __id: string };
-type ViewMode = "tender" | "suppliers" | "all";
+type EditableSupplierRow = SupplierRow & { __id: string }; // Keep for internal use if needed, but primarily use SupplierRow
+type ViewMode = "tender" | "suppliers" | "all"; // Still define, but 'suppliers' and 'all' views will be empty in this component
 
 const norm = (s: any) => String(s ?? "").trim().replace(/\s+/g, " ").toLowerCase();
 const number = (v: any, fallback = 0) => {
@@ -144,52 +131,123 @@ const parseTenderFile = async (file: File) => {
 /* ============================== Component ============================== */
 const TenderManagementTab: React.FC<Props> = ({ products, defaultMarginPct = 0, onUseMargin }) => {
   const { toast } = useToast();
-  const [view, setView] = useState<ViewMode>("tender");
+  // Removed view state for suppliers and all products as they are no longer managed here
+  const [view, setView] = useState<"tender">("tender"); // Only 'tender' view is relevant here
 
   const [state, setState] = useState<TenderPricingState>({
-    supplierRows: [], tenderItems: [], pricingMode: "margin",
-    targetMarginPct: defaultMarginPct, targetProfitAbsolute: 0,
-    // @ts-ignore
-    catalogsBySupplier: {},
+    supplierRows: [], // This will be derived from allApiSuppliers, but not explicitly used in this component's UI directly
+    tenderItems: [],
+    pricingMode: "margin",
+    targetMarginPct: defaultMarginPct,
+    targetProfitAbsolute: 0,
+    catalogsBySupplier: {}, // This will be derived from allApiSuppliers, but not not explicitly used in this component's UI directly
   });
 
+  // Global API states
+  const [allApiSuppliers, setAllApiSuppliers] = useState<SupplierRow[]>([]);
+  const [isLoadingSuppliers, setIsLoadingSuppliers] = useState(false);
+  const [supplierError, setSupplierError] = useState<string | null>(null);
+
+  const [apiTenders, setApiTenders] = useState<Tender[]>([]);
+  const [isLoadingTenders, setIsLoadingTenders] = useState(false);
+  const [tenderError, setTenderError] = useState<string | null>(null);
+
   // tender meta
-  const [tenderId, setTenderId] = useState<string>("");
+  const [tenderId, setTenderId] = useState<number | null>(null); // Changed to number for API
   const [tenderName, setTenderName] = useState<string>("");
-  const [tenders, setTenders] = useState<StoredTender[]>([]);
-  const refreshTenderList = () => setTenders(listTenders());
+  // const [tenders, setTenders] = useState<StoredTender[]>([]); // Replaced by apiTenders
 
   // local inputs
-  const [supplierNameHint, setSupplierNameHint] = useState<string>("");
-  const supplierInputRef = useRef<HTMLInputElement | null>(null);
+  // Removed supplierNameHint as supplier upload is removed from this tab
+  // Removed supplierInputRef as supplier upload is removed from this tab
   const tenderInputRef = useRef<HTMLInputElement | null>(null);
 
   const productsById = useMemo(() => {
     const map = new Map<number, PricingProduct>(); products.forEach(p => map.set(Number(p.id), p)); return map;
   }, [products]);
 
-  /* ---------- load & persist catalogs ---------- */
+  /* ---------- Data Fetching from API ---------- */
+  const fetchAllSuppliers = useCallback(async () => {
+    setIsLoadingSuppliers(true);
+    setSupplierError(null);
+    try {
+      const response = await fetch('/api/suppliers');
+      if (!response.ok) throw new Error(`Failed to fetch suppliers: ${response.statusText}`);
+      const data: SupplierRow[] = await response.json();
+      setAllApiSuppliers(data);
+    } catch (err: any) {
+      setSupplierError(err.message);
+      toast({ title: "Error", description: `Failed to load suppliers: ${err.message}`, variant: "destructive" });
+    } finally {
+      setIsLoadingSuppliers(false);
+    }
+  }, [toast]);
+
+  const fetchAllTenders = useCallback(async () => {
+    setIsLoadingTenders(true);
+    setTenderError(null);
+    try {
+      const response = await fetch('/api/tenders');
+      if (!response.ok) throw new Error(`Failed to fetch tenders: ${response.statusText}`);
+      const data: Tender[] = await response.json();
+      setApiTenders(data);
+    } catch (err: any) {
+      setTenderError(err.message);
+      toast({ title: "Error", description: `Failed to load tenders: ${err.message}`, variant: "destructive" });
+    } finally {
+      setIsLoadingTenders(false);
+    }
+  }, [toast]);
+
   useEffect(() => {
-    const catalogs = loadCatalogs() || {};
-    const supplierRows: EditableSupplierRow[] = Object.values(catalogs).flat().map((it: any) => ({
-      __id: it.id, supplierName: it.supplierName, sku: it.sku, productName: it.productName, unit: it.unit, price: it.price, currency: it.currency,
+    fetchAllSuppliers();
+    fetchAllTenders();
+  }, [fetchAllSuppliers, fetchAllTenders]);
+
+
+  /* ---------- Data Transformation for UI (Memoized) ---------- */
+  // Transform allApiSuppliers into catalogsBySupplier format for components that expect it
+  const catalogsBySupplierMemo = useMemo(() => {
+    return allApiSuppliers.reduce((acc, curr) => {
+      // Ensure the id is a string for CatalogItem compatibility if needed by the receiving component, though SupplierRow has number id
+      const item: CatalogItem = {
+        id: String(curr.id), // Convert number to string for existing CatalogItem type
+        supplierName: curr.supplierName,
+        sku: curr.sku || undefined, // Convert null to undefined
+        productName: curr.productName,
+        unit: curr.unit || undefined, // Convert null to undefined
+        price: Number(curr.price), // Ensure price is a number
+        currency: curr.currency || "ZAR", // Ensure currency is passed
+      };
+      (acc[curr.supplierName] = acc[curr.supplierName] || []).push(item);
+      return acc;
+    }, {} as Record<string, CatalogItem[]>);
+  }, [allApiSuppliers]);
+
+  // Derived state for supplierRows (used in the table view) - No longer directly used in this component's UI
+  const supplierRowsMemo = useMemo(() => {
+    return allApiSuppliers.map(it => ({
+      ...it,
+      __id: String(it.id), // Add __id for keying if needed by table
+      price: Number(it.price) // Ensure price is number for consistent calculations
     }));
-    setState(s => ({ ...s, catalogsBySupplier: catalogs as any, supplierRows }));
-    refreshTenderList();
-  }, []);
-  useEffect(() => { saveCatalogs((state as any).catalogsBySupplier || {}); }, [(state as any).catalogsBySupplier]);
+  }, [allApiSuppliers]);
 
   /* ---------- search index ---------- */
   const allCatalogItems: (CatalogItem & { searchName?: string })[] = useMemo(() => {
-    const out: (CatalogItem & { searchName?: string })[] = [];
-    const catalogs = (state as any).catalogsBySupplier || {};
-    Object.keys(catalogs).forEach(supplier => {
-      (catalogs[supplier] as (CatalogItem & { searchName?: string })[]).forEach(it =>
-        out.push({ ...it, searchName: canon((it as any).productName || "") })
-      );
-    });
-    return out;
-  }, [state]);
+    // Now directly use allApiSuppliers, converted to CatalogItem for fuse
+    return allApiSuppliers.map(it => ({
+      id: String(it.id),
+      supplierName: it.supplierName,
+      sku: it.sku || undefined,
+      productName: it.productName,
+      unit: it.unit || undefined,
+      price: Number(it.price),
+      currency: it.currency || "ZAR",
+      searchName: canon((it.productName || "")),
+    }));
+  }, [allApiSuppliers]);
+
 
   const fuse = useMemo(() => {
     if (!allCatalogItems.length) return null;
@@ -202,45 +260,46 @@ const TenderManagementTab: React.FC<Props> = ({ products, defaultMarginPct = 0, 
     if (!desc) return [];
     const q = canon(desc);
     const fuzzy: TenderSupplierOption[] = fuse
-      ? fuse.search(q, { limit }).map(r => ({ supplierName: r.item.supplierName, sku: r.item.sku, unit: r.item.unit, price: r.item.price, sourceId: r.item.id, score: r.score ?? 1 }))
+      ? fuse.search(q, { limit }).map(r => ({
+          supplierName: r.item.supplierName,
+          sku: r.item.sku,
+          unit: r.item.unit,
+          price: r.item.price,
+          sourceId: r.item.id, // sourceId refers to the CatalogItem's string ID
+          score: r.score ?? 1
+        }))
       : [];
     const codes = extractCodes(desc);
     const codeHits: TenderSupplierOption[] = codes.length
       ? allCatalogItems.filter(ci => ci.sku && codes.some(c => ci.sku!.includes(c)))
-        .map(ci => ({ supplierName: ci.supplierName, sku: ci.sku, unit: ci.unit, price: ci.price, sourceId: ci.id, score: 0.01 }))
+        .map(ci => ({
+          supplierName: ci.supplierName,
+          sku: ci.sku,
+          unit: ci.unit,
+          price: ci.price,
+          sourceId: ci.id,
+          score: 0.01
+        }))
       : [];
     const tokens = q.split(" ").filter(Boolean);
     const loose: TenderSupplierOption[] = !fuzzy.length && !codeHits.length
       ? allCatalogItems.filter(ci => containsAll(ci.searchName || canon((ci as any).productName || ""), tokens.slice(0, 3)))
-        .slice(0, limit).map(ci => ({ supplierName: ci.supplierName, sku: ci.sku, unit: ci.unit, price: ci.price, sourceId: ci.id, score: 0.5 }))
+        .slice(0, limit).map(ci => ({
+          supplierName: ci.supplierName,
+          sku: ci.sku,
+          unit: ci.unit,
+          price: ci.price,
+          sourceId: ci.id,
+          score: 0.5
+        }))
       : [];
-    const all = [...codeHits, ...fuzzy, ...loose].sort((a,b)=> a.price - b.price);
+    const all = [...codeHits, ...fuzzy, ...loose].sort((a,b)=>a.price-b.price);
     const seen = new Set<string>(); return all.filter(o => (seen.has(o.sourceId) ? false : (seen.add(o.sourceId), true))).slice(0, limit);
   };
 
-  /* ---------- uploads ---------- */
-  const handleSupplierUpload = async (file: File) => {
-    try {
-      const rows = await parseFile(file);
-      const fallbackSupplier = supplierNameHint?.trim() || file.name.replace(/\.(xlsx|xls|csv)$/i, "") || "Unknown Supplier";
-      const newItems: CatalogItem[] = [];
-      for (const r of rows) {
-        const supplierName = (r.supplier || r.Supplier || r.supplierName || r.SupplierName || fallbackSupplier).toString().trim();
-        const sku = (r.sku || r.SKU || r.code || "").toString().trim();
-        const productName = (r.product || r.Product || r.name || r.Name || r.description || r.Description || r.item || r.Item || "").toString().trim();
-        const unit = (r.unit || r.Unit || r.uom || r.UOM || "").toString().trim();
-        const price = number(r.price ?? r.Price ?? r.cost ?? r.Cost ?? r.new ?? r.New ?? r.current ?? r.Current, 0);
-        const currency = (r.currency || r.Currency || (String(r.price).includes("R") ? "ZAR" : "") || "ZAR").toString().trim();
-        if (!(productName || sku) || !(price > 0)) continue;
-        newItems.push({ id: storageUid(), supplierName, sku, productName, unit, price, currency } as any);
-      }
-      const catalogs: StoredCatalogs = { ...(state as any).catalogsBySupplier };
-      newItems.forEach((it:any) => { const s = it.supplierName; catalogs[s] = catalogs[s] || []; catalogs[s].push(it); });
-      saveCatalogs(catalogs);
-      setState(s => ({ ...s, catalogsBySupplier: catalogs as any, supplierRows: syncSupplierRowsFromCatalogs(catalogs) }));
-      toast({ title: "Supplier list uploaded", description: `${newItems.length} items added.` });
-    } catch (e:any) { toast({ title: "Failed to parse supplier file", description: e.message, variant: "destructive" }); }
-  };
+  /* ---------- uploads for Tenders ---------- */
+  // Removed handleSupplierUpload as supplier management is externalized
+  // Removed parsing for supplier files as supplier upload is removed from this tab
 
   const handleTenderUpload = async (file: File) => {
     try {
@@ -298,16 +357,24 @@ const TenderManagementTab: React.FC<Props> = ({ products, defaultMarginPct = 0, 
     return { cost: +cost.toFixed(2), price: +price.toFixed(2), profit: +(price - cost).toFixed(2), marginPct: +(cost>0 ? ((price-cost)/cost*100).toFixed(2) : 0) };
   }, [state.tenderItems]);
 
-  /* ---------- helpers & CRUD ---------- */
-  const syncSupplierRowsFromCatalogs = (catalogs: StoredCatalogs) =>
-    Object.values(catalogs).flat().map((it: any) => ({ __id: it.id, supplierName: it.supplierName, sku: it.sku, productName: it.productName, unit: it.unit, price: it.price, currency: it.currency }));
-
-  const deleteRow = (id: string) => {
-    const catalogs: StoredCatalogs = { ...(state as any).catalogsBySupplier }; let changed = false;
-    for (const s of Object.keys(catalogs)) { const before = catalogs[s].length; catalogs[s] = catalogs[s].filter(it => it.id !== id); if (catalogs[s].length !== before) changed = true; }
-    if (changed) { saveCatalogs(catalogs); setState(prev => ({ ...prev, catalogsBySupplier: catalogs as any, supplierRows: syncSupplierRowsFromCatalogs(catalogs) })); }
+  /* ---------- Supplier CRUD for SupplierManagerPanel (via API) ---------- */
+  // These functions are no longer needed here as supplier management is externalized
+  // Kept as placeholders for reference if needed elsewhere.
+  const handleSaveSupplierItem = async (item: CatalogItem) => {
+    // This logic should ideally reside in the dedicated SupplierManagerPanel's context
+    toast({ title: "Info", description: "Supplier item saving is handled by the Supplier Manager tab.", variant: "info" });
   };
-  const clearAll = () => { saveCatalogs({}); setState(s => ({ ...s, supplierRows: [], catalogsBySupplier: {} as any })); };
+
+  const handleDeleteSupplierItem = async (supplierName: string, id: string) => {
+    // This logic should ideally reside in the dedicated SupplierManagerPanel's context
+    toast({ title: "Info", description: "Supplier item deletion is handled by the Supplier Manager tab.", variant: "info" });
+  };
+
+  const handleRenameSupplierApi = async (oldName: string, newName: string) => {
+    // This logic should ideally reside in the dedicated SupplierManagerPanel's context
+    toast({ title: "Info", description: "Supplier renaming is handled by the Supplier Manager tab.", variant: "info" });
+  };
+
   const handleReprice = () => { setState(s => recalc(s)); if (state.pricingMode === "margin" && onUseMargin) onUseMargin(state.targetMarginPct); toast({ title: "Pricing updated", description: "Suggested prices refreshed." }); };
 
   const exportCSV = () => {
@@ -320,49 +387,99 @@ const TenderManagementTab: React.FC<Props> = ({ products, defaultMarginPct = 0, 
     const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "tender_pricing.csv"; a.click(); URL.revokeObjectURL(url);
   };
 
-  const upsertItems = (supplier: string, items: CatalogItem[]) => {
-    const catalogs: StoredCatalogs = { ...(state as any).catalogsBySupplier };
-    catalogs[supplier] = (items || []).map((it:any) => ({ id: it.id || storageUid(), supplierName: supplier, sku: it.sku, productName: it.productName, unit: it.unit, price: Number(it.price||0), currency: it.currency || "ZAR" }));
-    saveCatalogs(catalogs); setState(prev => ({ ...prev, catalogsBySupplier: catalogs as any, supplierRows: syncSupplierRowsFromCatalogs(catalogs) }));
-  };
-  const deleteItem = (supplier: string, id: string) => {
-    const catalogs: StoredCatalogs = { ...(state as any).catalogsBySupplier }; catalogs[supplier] = (catalogs[supplier] || []).filter(it => it.id !== id);
-    saveCatalogs(catalogs); setState(prev => ({ ...prev, catalogsBySupplier: catalogs as any, supplierRows: syncSupplierRowsFromCatalogs(catalogs) }));
-  };
-  const renameSupplier = (oldName: string, newName: string) => {
-    if (oldName === newName) return;
-    const catalogs: StoredCatalogs = { ...(state as any).catalogsBySupplier };
-    const moved = (catalogs[oldName] || []).map(it => ({ ...it, supplierName: newName })); delete catalogs[oldName];
-    catalogs[newName] = [ ...(catalogs[newName] || []), ...moved ];
-    saveCatalogs(catalogs); setState(prev => ({ ...prev, catalogsBySupplier: catalogs as any, supplierRows: syncSupplierRowsFromCatalogs(catalogs) }));
-  };
-  const mergeUpload = async (supplier: string, file: File) => {
-    const rows = await parseFile(file);
-    const toAdd = rows.map((r:any)=>({ id: storageUid(), supplierName: supplier, sku: (r.sku||r.SKU||r.code||"").toString().trim(), productName: (r.product||r.Product||r.name||r.Name||r.description||r.Description||r.item||r.Item||"").toString().trim(), unit: (r.unit||r.Unit||r.uom||r.UOM||"").toString().trim(), price: Number((r.price??r.Price??r.cost??r.Cost??r.new??r.New??r.current??r.Current)||0), currency: (r.currency||r.Currency||"ZAR").toString().trim(),})).filter(x => (x.productName||x.sku) && x.price>0);
-    const catalogs: StoredCatalogs = { ...(state as any).catalogsBySupplier }; catalogs[supplier] = [ ...(catalogs[supplier] || []), ...toAdd ];
-    saveCatalogs(catalogs); setState(prev => ({ ...prev, catalogsBySupplier: catalogs as any, supplierRows: syncSupplierRowsFromCatalogs(catalogs) }));
-  };
 
-  /* ---------- save/load tender ---------- */
-  const handleSaveTender = () => {
+  /* ---------- save/load tender (via API) ---------- */
+  const handleSaveTender = async () => {
     const name = (tenderName || "").trim();
     if (!name) return toast({ title: "Name required", description: "Give this tender a name before saving.", variant: "destructive" });
-    const now = new Date().toISOString(); const existing = tenderId ? getTender(tenderId) : undefined;
-    const payload: StoredTender = {
-      id: tenderId || storageUid(), name, createdAt: existing?.createdAt || now, updatedAt: now,
-      pricingMode: state.pricingMode as any, targetMarginPct: Number(state.targetMarginPct || 0), targetProfitAbsolute: Number(state.targetProfitAbsolute || 0),
-      items: state.tenderItems.map(it => ({ lineNo: it.lineNo as any, description: it.description, unit: it.unit, qty: Number(it.qty||0), chosenSourceId: it.chosenSourceId, costPerUnit: it.costPerUnit })),
-    };
-    storageSaveTender(payload); setTenderId(payload.id); refreshTenderList(); toast({ title: "Tender saved", description: `Saved as “${name}”.` });
+
+    try {
+      const itemsPayload = state.tenderItems.map(it => ({
+            lineNo: it.lineNo,
+            description: it.description,
+            unit: it.unit,
+            qty: Number(it.qty || 0), // Explicitly ensure qty is a number, with fallback
+            chosenSourceId: it.chosenSourceId,
+            costPerUnit: Number(it.costPerUnit || 0), // Explicitly ensure costPerUnit is a number, with fallback
+            // Ensure suggestedUnitPrice and suggestedLineTotal are numbers, with fallback, if your backend schema includes them
+            suggestedUnitPrice: Number((it as any).suggestedUnitPrice || 0),
+            suggestedLineTotal: Number((it as any).suggestedLineTotal || 0),
+        }));
+
+      const payload: Partial<Tender> = {
+        name,
+        pricingMode: state.pricingMode,
+        targetMarginPct: Number(state.targetMarginPct || 0), // Ensure number and handle potential NaN
+        targetProfitAbsolute: Number(state.targetProfitAbsolute || 0), // Ensure number and handle potential NaN
+        items: JSON.stringify(itemsPayload), // STRINGIFY THE ITEMS ARRAY
+      };
+
+      const isNewTender = tenderId === null;
+      const url = isNewTender ? "/api/tenders" : `/api/tenders/${tenderId}`;
+      const method = isNewTender ? "POST" : "PUT";
+
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.message || `Failed to ${isNewTender ? 'create' : 'update'} tender.`);
+      }
+
+      const savedTender: Tender = await res.json();
+      setTenderId(savedTender.id);
+      setTenderName(savedTender.name);
+      toast({ title: "Tender saved", description: `Saved as “${savedTender.name}”.` });
+      await fetchAllTenders(); // Refresh the list of tenders
+    } catch (e: any) {
+      toast({ title: "Error", description: `Failed to save tender: ${e.message}`, variant: "destructive" });
+    }
   };
-  const handleLoadTender = (id: string) => {
-    const data = id ? getTender(id) : undefined;
-    if (!data) return;
-    setTenderId(data.id); setTenderName(data.name || "");
-    setState(s => ({ ...s, tenderItems: (data.items||[]) as any, pricingMode: (data.pricingMode || "margin") as any, targetMarginPct: Number(data.targetMarginPct || 0), targetProfitAbsolute: Number(data.targetProfitAbsolute || 0) }));
-    toast({ title: "Tender loaded", description: `Loaded “${data.name}”.` });
+
+  const handleLoadTender = async (id: number) => {
+    try {
+      const res = await fetch(`/api/tenders/${id}`);
+      if (!res.ok) throw new Error(`Failed to load tender (${res.statusText})`);
+      const data: Tender = await res.json();
+
+      setTenderId(data.id);
+      setTenderName(data.name || "");
+      setState(s => ({
+        ...s,
+        // PARSE THE ITEMS STRING BACK TO AN ARRAY
+        tenderItems: data.items ? (JSON.parse(data.items as string) as TenderItem[]) : [],
+        pricingMode: data.pricingMode || "margin",
+        targetMarginPct: Number(data.targetMarginPct || 0), // Ensure it's a number
+        targetProfitAbsolute: Number(data.targetProfitAbsolute || 0), // Ensure it's a number
+      }));
+      toast({ title: "Tender loaded", description: `Loaded “${data.name}”.` });
+    } catch (e: any) {
+      toast({ title: "Error", description: `Failed to load tender: ${e.message}`, variant: "destructive" });
+    }
   };
-  const handleDeleteTender = (id: string) => { if (!id) return; storageDeleteTender(id); if (tenderId===id){ setTenderId(""); setTenderName(""); } refreshTenderList(); toast({ title: "Tender deleted" }); };
+
+  const handleDeleteTender = async (id: number) => {
+    try {
+      const confirmed = window.confirm("Are you sure you want to delete this tender?"); // Use native confirm temporarily
+      if (!confirmed) return;
+
+      const res = await fetch(`/api/tenders/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`Failed to delete tender (${res.statusText})`);
+
+      if (tenderId === id) { // If the currently active tender is deleted
+        setTenderId(null);
+        setTenderName("");
+        setState(s => ({ ...s, tenderItems: [] }));
+      }
+      toast({ title: "Tender deleted", description: "Tender removed successfully." });
+      await fetchAllTenders(); // Refresh the list of tenders
+    } catch (e: any) {
+      toast({ title: "Error", description: `Failed to delete tender: ${e.message}`, variant: "destructive" });
+    }
+  };
 
   useEffect(() => { setState(s => recalc(s)); /* eslint-disable-next-line */ }, [state.targetMarginPct, state.targetProfitAbsolute, state.pricingMode]);
 
@@ -373,13 +490,9 @@ const TenderManagementTab: React.FC<Props> = ({ products, defaultMarginPct = 0, 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-semibold">Tender Management</h2>
-          <p className="text-sm text-muted-foreground">Upload supplier lists & BOQs, then generate suggested pricing.</p>
+          <p className="text-sm text-muted-foreground">Upload BOQs and generate suggested pricing using your supplier data.</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant={view==="tender" ? "default" : "outline"} onClick={()=>setView("tender")}>Tender</Button>
-          <Button variant={view==="suppliers" ? "default" : "outline"} onClick={()=>setView("suppliers")}>Supplier Manager</Button>
-          <Button variant={view==="all" ? "default" : "outline"} onClick={()=>setView("all")}>All Products</Button>
-        </div>
+        {/* Removed view toggle buttons, as only 'tender' view is relevant here */}
       </div>
 
       {/* Compact top toolbar */}
@@ -394,23 +507,34 @@ const TenderManagementTab: React.FC<Props> = ({ products, defaultMarginPct = 0, 
 
             <div className="flex flex-wrap gap-2">
               <Button onClick={handleSaveTender}><Save className="w-4 h-4 mr-2" /> Save</Button>
-              <Button variant="outline" onClick={()=>{ setTenderId(""); setTenderName(""); setState(s=>({...s, tenderItems:[]})); }}>
+              <Button variant="outline" onClick={()=>{ setTenderId(null); setTenderName(""); setState(s=>({...s, tenderItems:[]})); }}>
                 <X className="w-4 h-4 mr-2" /> Clear lines
               </Button>
               <Button variant="secondary" onClick={exportCSV}><Download className="w-4 h-4 mr-2" /> Export</Button>
 
               <div className="flex items-end gap-2">
-                <select className="border rounded px-3 py-2 bg-background" onChange={(e)=>handleLoadTender(e.target.value)} value="">
+                <select className="border rounded px-3 py-2 bg-background" onChange={(e)=>handleLoadTender(parseInt(e.target.value))} value="">
                   <option value="">Load saved tender</option>
-                  {tenders.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  {apiTenders.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
                 <Button variant="destructive" onClick={()=>{
-                  const id = prompt("Delete which tender ID?");
-                  if (id) handleDeleteTender(id);
+                  if (tenderId) handleDeleteTender(tenderId); // Delete active tender
+                  else alert("No tender loaded to delete. Load a tender first, or enter its ID manually.");
                 }}>
-                  Delete
+                  Delete Current
                 </Button>
-                <Button variant="outline" onClick={refreshTenderList} title="Refresh list">
+                <Input
+                  className="w-24 text-sm"
+                  placeholder="ID to delete"
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter') {
+                      const idToDelete = parseInt((e.target as HTMLInputElement).value);
+                      if (!isNaN(idToDelete)) handleDeleteTender(idToDelete);
+                      (e.target as HTMLInputElement).value = ''; // Clear input
+                    }
+                  }}
+                />
+                <Button variant="outline" onClick={fetchAllTenders} title="Refresh list">
                   <RefreshCw className="w-4 h-4" />
                 </Button>
               </div>
@@ -421,27 +545,9 @@ const TenderManagementTab: React.FC<Props> = ({ products, defaultMarginPct = 0, 
 
       {view === "tender" && (
         <>
-          {/* Upload row */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Card className="p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="font-medium">Supplier List</h3>
-                {/* <DropdownMenu> ... more actions if needed ... </DropdownMenu> */}
-                <MoreHorizontal className="w-4 h-4 text-muted-foreground" />
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <div className="sm:col-span-2">
-                  <Input ref={supplierInputRef} type="file" accept=".csv,.xlsx,.xls"
-                    onChange={(e)=>{ const f=e.target.files?.[0]; if(f) handleSupplierUpload(f); if (supplierInputRef.current) supplierInputRef.current.value=""; }}
-                  />
-                </div>
-                <Input placeholder="Supplier name (optional)" value={supplierNameHint} onChange={(e)=>setSupplierNameHint(e.target.value)} />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Columns are flexible. If <code>supplier</code> is missing, I’ll use the typed name, the file name, or “Unknown Supplier”.
-              </p>
-            </Card>
-
+          {/* Removed Supplier List upload card. Supplier data is now pulled from the API managed elsewhere. */}
+          {/* Only Tender BOQ upload card remains */}
+          <div className="grid grid-cols-1 md:grid-cols-1 gap-4"> {/* Changed to 1 column */}
             <Card className="p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="font-medium">Tender BOQ</h3>
@@ -490,50 +596,8 @@ const TenderManagementTab: React.FC<Props> = ({ products, defaultMarginPct = 0, 
             </div>
           </Card>
 
-          {/* Supplier items */}
-          <Card className="overflow-hidden">
-            <div className="flex items-center justify-between p-3">
-              <h3 className="font-medium">Supplier Items</h3>
-              <Button variant="secondary" onClick={clearAll} disabled={!state.supplierRows.length}>
-                <Trash2 className="w-4 h-4 mr-1" /> Clear All
-              </Button>
-            </div>
-            <div className="overflow-auto">
-              <table className="min-w-full text-xs md:text-sm">
-                <thead className="sticky top-0 bg-background border-b">
-                  <tr>
-                    <th className="text-left p-2">Supplier</th>
-                    <th className="text-left p-2">SKU</th>
-                    <th className="text-left p-2">Product</th>
-                    <th className="text-left p-2">Unit</th>
-                    <th className="text-right p-2">Price</th>
-                    <th className="text-left p-2">Currency</th>
-                    <th className="text-right p-2">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="[&>tr:nth-child(even)]:bg-muted/30">
-                  {(state.supplierRows as any[]).map((row: EditableSupplierRow) => (
-                    <tr key={row.__id} className="border-b last:border-0">
-                      <td className="p-2">{row.supplierName}</td>
-                      <td className="p-2">{row.sku || ""}</td>
-                      <td className="p-2">{row.productName}</td>
-                      <td className="p-2">{row.unit || ""}</td>
-                      <td className="p-2 text-right">{Number(row.price || 0).toFixed(2)}</td>
-                      <td className="p-2">{row.currency || "ZAR"}</td>
-                      <td className="p-2 text-right">
-                        <Button variant="destructive" size="sm" onClick={() => deleteRow(row.__id)}>
-                          <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {!state.supplierRows.length && (
-                <div className="p-6 text-center text-muted-foreground">Upload a supplier file to see items here.</div>
-              )}
-            </div>
-          </Card>
+          {/* Removed Supplier items table. Supplier management is externalized. */}
+          {/* The tender lines will still use suppliers pulled from the API for matching. */}
 
           {/* Tender lines */}
           <Card className="overflow-hidden">
@@ -622,19 +686,7 @@ const TenderManagementTab: React.FC<Props> = ({ products, defaultMarginPct = 0, 
         </>
       )}
 
-      {view === "suppliers" && (
-        <SupplierManagerPanel
-          catalogsBySupplier={(state as any).catalogsBySupplier || {}}
-          onUpsertItems={upsertItems}
-          onDeleteItem={deleteItem}
-          onRenameSupplier={renameSupplier}
-          onMergeUpload={mergeUpload}
-        />
-      )}
-
-      {view === "all" && (
-        <AllCatalogsView catalogsBySupplier={(state as any).catalogsBySupplier || {}} />
-      )}
+      {/* Removed SupplierManagerPanel and AllCatalogsView renderings */}
     </div>
   );
 };

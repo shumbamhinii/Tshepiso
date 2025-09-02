@@ -137,6 +137,18 @@ export const suppliers = pgTable("suppliers", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// --- NEW: Tenders table definition ---
+export const tenders = pgTable("tenders", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  pricingMode: varchar("pricing_mode", { length: 50 }).default('margin').notNull(), // 'margin' or 'targetProfit'
+  targetMarginPct: numeric("target_margin_pct").default(0),
+  targetProfitAbsolute: numeric("target_profit_absolute").default(0),
+  // Storing tender items as JSONB array for flexibility
+  items: text("items").notNull().default('[]'), // Changed to text to store stringified JSON
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
 
 // --- Select schemas for existing tables (keep as is) ---
 export const selectExpenseSchema = createSelectSchema(expenses);
@@ -149,8 +161,8 @@ export const selectServiceCatalogSchema = createSelectSchema(serviceCatalog);
 export const selectProjectComponentSchema = createSelectSchema(projectComponents);
 export const selectCostSchema = createSelectSchema(costs);
 export const selectInvoiceSchema = createSelectSchema(invoices);
-export const selectSupplierSchema = createSelectSchema(suppliers); // NEW: Export the new selectSupplierSchema
-
+export const selectSupplierSchema = createSelectSchema(suppliers);
+export const selectTenderSchema = createSelectSchema(tenders); // NEW: Export the new selectTenderSchema
 
 // --- Insert schemas (adjusted for new table structures) ---
 export const insertExpenseSchema = createInsertSchema(expenses).omit({
@@ -200,11 +212,19 @@ export const insertInvoiceSchema = createInsertSchema(invoices).omit({
   createdAt: true,
 });
 
-export const insertSupplierSchema = createInsertSchema(suppliers).omit({ // NEW: Export the new insertSupplierSchema
+export const insertSupplierSchema = createInsertSchema(suppliers).omit({
   id: true,
   createdAt: true,
 });
 
+export const insertTenderSchema = createInsertSchema(tenders).omit({ // NEW: Export the new insertTenderSchema
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  // Define 'items' as a string because it's JSON.stringified on the frontend and stored as TEXT
+  items: z.string(), // Changed from z.array(z.object(...)) to z.string()
+});
 
 // --- Types (adjusted for new table structures) ---
 export type Expense = z.infer<typeof selectExpenseSchema>;
@@ -237,5 +257,8 @@ export type InsertCost = z.infer<typeof insertCostSchema>;
 export type Invoice = z.infer<typeof selectInvoiceSchema>;
 export type InsertInvoice = z.infer<typeof insertInvoiceSchema>;
 
-export type Supplier = z.infer<typeof selectSupplierSchema>; // NEW: Export the new Supplier type
-export type InsertSupplier = z.infer<typeof insertSupplierSchema>; // NEW: Export the new InsertSupplier type
+export type Supplier = z.infer<typeof selectSupplierSchema>;
+export type InsertSupplier = z.infer<typeof insertSupplierSchema>;
+
+export type Tender = z.infer<typeof selectTenderSchema>; // NEW: Export the new Tender type
+export type InsertTender = z.infer<typeof insertTenderSchema>; // NEW: Export the new InsertTender type

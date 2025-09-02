@@ -1,4 +1,3 @@
-// pages/pricing-calculator.tsx
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import SidebarNavigation from "@/components/pricing/sidebar-navigation";
@@ -12,6 +11,7 @@ import SnapshotsTab from "@/components/pricing/snapshots-tab";
 import PricingChatbot from "@/components/pricing/PricingChatbot";
 import ProjectsTab from "@/components/pricing/ProjectsTab";
 import Dashboard from "@/components/pricing/Dashboard";
+import SuppliersTab from "@/components/pricing/SuppliersTab";
 import FinancialManagementWrapper from "@/components/financials/FinancialManagementWrapper";
 import { calculatePricing } from "@/lib/pricing-calculations";
 import {
@@ -180,7 +180,7 @@ export default function PricingCalculator() {
       await new Promise((resolve) => setTimeout(resolve, 300));
       const calculatedResults = calculatePricing(setup, activeProducts as any);
       setResults(calculatedResults);
-      setActiveTab("results");
+      setActiveTab("products"); // Changed to Products tab after calculation
       toast({
         title: "Calculation complete",
         description: `Calculated ${activeProducts.length} in‑stock products.`
@@ -511,99 +511,170 @@ const handleCreateSnapshot = async (name: string, description?: string) => {
     }
   };
 
-  const renderActiveTab = () => {
-    switch (activeTab) {
-      case "setup":
-        return (
-          <SetupTab
-            setup={setup}
-            onSetupChange={setSetup}
-            onCalculate={handleCalculate}
-            isCalculating={isCalculating}
-          />
-        );
-      case "products":
-        return <ProductsTab products={products} onProductsChange={setProducts} />;
-      case "results":
-        return (
-          <ResultsTab
-            results={results}
-            onApplyPrices={() =>
-              toast({ title: "Prices applied", description: "Your pricing report is being generated." })
-            }
-            onExportPdf={() =>
-              toast({ title: "Export initiated", description: "Your pricing report is being generated." })
-            }
-          />
-        );
-      case "scenarios":
-        return (
-          <ScenariosTab
-            scenarios={scenarios}
-            onScenariosChange={setScenarios}
-            onRunScenario={handleRunScenario}
-            baseResults={results}
-          />
-        );
-      case "tenders":
-        return (
-          <TenderManagementTab
-            products={products}
-            defaultMarginPct={Number(setup.targetMargin) || 0}
-            onUseMargin={(pct: any) => setSetup((s) => ({ ...s, useMargin: true, targetMargin: pct }))}
-          />
-        );
-      case "competitors":
-        return (
-          <CompetitorsTab
-            products={products}
-            competitorPrices={competitorPrices}
-            onCompetitorPricesChange={setCompetitorPrices}
-          />
-        );
-      case "budget":
-        return <BudgetTab budgetItems={budgetItems} onBudgetItemsChange={setBudgetItems} />;
-      case "pricingchat":
-        return <PricingChatbot />;
-      case "projects":
-        return <ProjectsTab />;
-      case "snapshots":
-        if (loadingSnapshots) return <div className="p-8 text-center text-muted-foreground">Loading snapshots...</div>;
-        if (errorSnapshots) return <div className="p-8 text-center text-destructive">Error: {errorSnapshots}</div>;
-        return (
-          <SnapshotsTab
-            snapshots={snapshots}
-            onSnapshotsChange={setSnapshots}
-            onLoadSnapshot={handleLoadSnapshot}
-            onCreateSnapshot={handleCreateSnapshot}
-            onDeleteSnapshot={handleDeleteSnapshot}
-            onSelectForQuotations={handleSelectSnapshotForQuotations}
-            onClearSnapshot={handleClearSnapshot}
-          />
-        );
-      case "financial-management":
-        return (
-          <FinancialManagementWrapper
-            activeSubTab={activeFinancialSubTab}
-            onSubTabChange={setActiveFinancialSubTab}
-          />
-        );
+// pages/pricing-calculator.tsx
 
-      // 🔥 NEW: Dashboard tab
-      case "dashboard":
-        return (
-          <Dashboard
-            results={results}
-            products={products}
-            onExportPdf={handleExportDashboardPdf}
-            onRefresh={handleRefreshDashboard}
-          />
-        );
+const renderActiveTab = () => {
+  switch (activeTab) {
+    case "setup":
+      return (
+        <SetupTab
+          setup={setup}
+          onSetupChange={setSetup}
+          onCalculate={handleCalculate}
+          isCalculating={isCalculating}
+          products={products}
+          onProductsChange={setProducts}
+        />
+      );
 
-      default:
-        return null;
-    }
-  };
+    case "products":
+      return (
+        <ProductsTab
+          products={products}
+          onProductsChange={setProducts}
+          fixedCost={results?.actualCost || 0}
+          results={results} // <-- Add results prop here
+          onApplyPrices={() => {
+            // Apply calculated prices from results to products
+            if (results?.calculatedProducts) {
+              const updatedProducts = products.map(product => {
+                const calculatedProduct = results.calculatedProducts?.find(cp => cp.id === product.id);
+                if (calculatedProduct && calculatedProduct.price !== undefined) {
+                  return {
+                    ...product,
+                    price: calculatedProduct.price
+                  };
+                }
+                return product;
+              });
+              setProducts(updatedProducts);
+              toast({ 
+                title: "Prices applied", 
+                description: "The calculated prices have been applied to your products." 
+              });
+            }
+          }}
+          onExportPdf={() =>
+            toast({ title: "Export initiated", description: "Your pricing report PDF is being generated." })
+          }
+        />
+      );
+
+    case "results":
+      return (
+        <ResultsTab
+          results={results}
+          onApplyPrices={() => {
+            // Actually apply the calculated prices to the products state
+            if (results?.calculatedProducts) {
+              const updatedProducts = products.map(product => {
+                const calculatedProduct = results.calculatedProducts?.find(cp => cp.id === product.id);
+                if (calculatedProduct) {
+                  return {
+                    ...product,
+                    price: calculatedProduct.price
+                  };
+                }
+                return product;
+              });
+              setProducts(updatedProducts);
+              toast({ 
+                title: "Prices applied", 
+                description: "The calculated prices have been applied to your products." 
+              });
+            } else {
+              toast({ 
+                title: "No prices to apply", 
+                description: "No calculated results available.", 
+                variant: "destructive" 
+              });
+            }
+          }}
+          onExportPdf={() =>
+            toast({ title: "Export initiated", description: "Your pricing report is being generated." })
+          }
+        />
+      );
+     
+
+    case "scenarios":
+      return (
+        <ScenariosTab
+          scenarios={scenarios}
+          onScenariosChange={setScenarios}
+          onRunScenario={handleRunScenario}
+          baseResults={results}
+        />
+      );
+
+    case "tenders":
+      return (
+        <TenderManagementTab
+          products={products}
+          defaultMarginPct={Number(setup.targetMargin) || 0}
+          onUseMargin={(pct: any) => setSetup((s) => ({ ...s, useMargin: true, targetMargin: pct }))}
+        />
+      );
+
+    case "competitors":
+      return (
+        <CompetitorsTab
+          products={products}
+          competitorPrices={competitorPrices}
+          onCompetitorPricesChange={setCompetitorPrices}
+        />
+      );
+
+    case "budget":
+      return <BudgetTab budgetItems={budgetItems} onBudgetItemsChange={setBudgetItems} />;
+
+    case "pricingchat":
+      return <PricingChatbot />;
+
+    case "projects":
+      return <ProjectsTab />;
+
+    case "snapshots":
+      if (loadingSnapshots) return <div className="p-8 text-center text-muted-foreground">Loading snapshots...</div>;
+      if (errorSnapshots) return <div className="p-8 text-center text-destructive">Error: {errorSnapshots}</div>;
+      return (
+        <SnapshotsTab
+          snapshots={snapshots}
+          onSnapshotsChange={setSnapshots}
+          onLoadSnapshot={handleLoadSnapshot}
+          onCreateSnapshot={handleCreateSnapshot}
+          onDeleteSnapshot={handleDeleteSnapshot}
+          onSelectForQuotations={handleSelectSnapshotForQuotations}
+          onClearSnapshot={handleClearSnapshot}
+        />
+      );
+
+    case "financial-management":
+      return (
+        <FinancialManagementWrapper
+          activeSubTab={activeFinancialSubTab}
+          onSubTabChange={setActiveFinancialSubTab}
+        />
+      );
+
+    case "dashboard":
+      return (
+        <Dashboard
+          results={results}
+          products={products}
+          onExportPdf={handleExportDashboardPdf}
+          onRefresh={handleRefreshDashboard}
+        />
+      );
+
+    case "suppliers": // <-- NEW
+      return <SuppliersTab />;
+
+    default:
+      return null;
+  }
+};
+
 
   return (
     <div className="min-h-screen flex bg-background">

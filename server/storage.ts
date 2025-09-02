@@ -27,6 +27,9 @@ import {
   type Supplier, // NEW: Import the new Supplier type
   type InsertSupplier, // NEW: Import the new InsertSupplier type
   insertMasterProductSchema, // NEW: Import insertMasterProductSchema for direct product creation
+  tenders, // NEW: Import tenders schema
+  type Tender, // NEW: Import Tender type
+  type InsertTender, // NEW: Import InsertTender type
   
   // Keep existing imports if you still use them (e.g., masterProducts, snapshots)
   masterProducts, // Assuming you still use master_products
@@ -126,6 +129,15 @@ export interface IStorage {
   // --- NEW: Suppliers methods ---
   importSuppliers(data: InsertSupplier[]): Promise<Supplier[]>;
   getAllSuppliers(): Promise<Supplier[]>;
+  updateSupplier(id: number, supplier: Partial<InsertSupplier>): Promise<Supplier>;
+  deleteSupplier(id: number): Promise<boolean>;
+
+  // --- NEW: Tender methods ---
+  getAllTenders(): Promise<Tender[]>;
+  getTender(id: number): Promise<Tender | undefined>;
+  createTender(tender: InsertTender): Promise<Tender>;
+  updateTender(id: number, tender: Partial<InsertTender>): Promise<Tender>;
+  deleteTender(id: number): Promise<boolean>;
 }
 
 export class PgStorage implements IStorage {
@@ -216,10 +228,18 @@ export class PgStorage implements IStorage {
     return result[0];
   }
 
-  async createSnapshotProduct(product: InsertSnapshotProduct): Promise<SnapshotProduct> {
-    const result = await db.insert(snapshotProducts).values(product).returning();
-    return result[0];
-  }
+  // Ensure 'price' is included when creating a snapshot product
+  async createSnapshotProduct(product: InsertSnapshotProduct): Promise<SnapshotProduct> {
+    const result = await db.insert(snapshotProducts).values({
+      ...product,
+      price: product.price, // Explicitly include the price
+      // Ensure other numeric fields like costPerUnit, expectedUnits, revenuePercentage are passed as numbers or converted
+      costPerUnit: parseFloat(product.costPerUnit as any),
+      expectedUnits: parseInt(product.expectedUnits as any),
+      revenuePercentage: parseFloat(product.revenuePercentage as any)
+    }).returning();
+    return result[0];
+  }
 
   async updateSnapshotProduct(id: number, product: Partial<InsertSnapshotProduct>): Promise<SnapshotProduct> {
     const result = await db.update(snapshotProducts).set(product).where(eq(snapshotProducts.id, id)).returning();
@@ -234,9 +254,10 @@ export class PgStorage implements IStorage {
     return result.length > 0;
   }
 
-  async getSnapshotProductsBySnapshotId(snapshotId: number): Promise<SnapshotProduct[]> {
-    return db.select().from(snapshotProducts).where(eq(snapshotProducts.snapshotId, snapshotId));
-  }
+  // Ensure 'price' is selected when retrieving snapshot products
+  async getSnapshotProductsBySnapshotId(snapshotId: number): Promise<SnapshotProduct[]> {
+    return db.select().from(snapshotProducts).where(eq(snapshotProducts.snapshotId, snapshotId));
+  }
 
   // --- Existing Expense methods ---
   async getExpense(id: number): Promise<Expense | undefined> {
@@ -461,15 +482,90 @@ export class PgStorage implements IStorage {
 // --- NEW: Suppliers methods ---
 async importSuppliers(data: InsertSupplier[]): Promise<Supplier[]> {
   if (data.length === 0) return [];
+  // `on conflict do nothing` will prevent duplicates based on primary key or unique constraint
+  // If you need to update on conflict, use `.onConflictDoUpdate(...)`
   const result = await db.insert(suppliers).values(data).returning();
   return result;
 }
 
 async getAllSuppliers(): Promise<Supplier[]> {
-  // Drizzle already maps column names as defined in @shared/schema
-  // Order newest first so imports appear at the top
   const rows = await db.select().from(suppliers).orderBy(desc(suppliers.id));
   return rows;
+}
+
+async updateSupplier(id: number, supplier: Partial<InsertSupplier>): Promise<Supplier> {
+  const result = await db.update(suppliers).set(supplier).where(eq(suppliers.id, id)).returning();
+  if (result.length === 0) {
+    throw new Error(`Supplier with id ${id} not found or not updated.`);
+  }
+  return result[0];
+}
+
+async deleteSupplier(id: number): Promise<boolean> {
+  const result = await db.delete(suppliers).where(eq(suppliers.id, id)).returning({ id: suppliers.id });
+  return result.length > 0;
+}
+
+// --- NEW: Tender methods ---
+async getAllTenders(): Promise<Tender[]> {
+  const result = await db.select().from(tenders).orderBy(desc(tenders.createdAt));
+  // Parse items from JSON string to object array for each tender
+  return result.map(tender => ({
+    ...tender,
+    items: JSON.parse(tender.items as string),
+  }));
+}
+
+async getTender(id: number): Promise<Tender | undefined> {
+  const result = await db.select().from(tenders).where(eq(tenders.id, id)).limit(1);
+  if (result.length === 0) {
+    return undefined;
+  }
+  // Parse items from JSON string to object array
+  return {
+    ...result[0],
+    items: JSON.parse(result[0].items as string),
+  };
+}
+
+async createTender(insertTender: InsertTender): Promise<Tender> {
+  // Stringify the 'items' array before saving
+  const payload = {
+    ...insertTender,
+    items: JSON.stringify(insertTender.items || []), // Ensure it's always a stringified array
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const result = await db.insert(tenders).values(payload).returning();
+  // Parse items back before returning
+  return {
+    ...result[0],
+    items: JSON.parse(result[0].items as string),
+  };
+}
+
+async updateTender(id: number, updateData: Partial<InsertTender>): Promise<Tender> {
+  // Stringify 'items' if it's part of the update data
+  const payload = { ...updateData } as any;
+  if (payload.items !== undefined) {
+    payload.items = JSON.stringify(payload.items);
+  }
+  payload.updatedAt = new Date(); // Update updatedAt on changes
+
+  const result = await db.update(tenders).set(payload).where(eq(tenders.id, id)).returning();
+  if (result.length === 0) {
+    throw new Error(`Tender with id ${id} not found or not updated.`);
+  }
+  // Parse items back before returning
+  return {
+    ...result[0],
+    items: JSON.parse(result[0].items as string),
+  };
+}
+
+async deleteTender(id: number): Promise<boolean> {
+  const result = await db.delete(tenders).where(eq(tenders.id, id)).returning({ id: tenders.id });
+  return result.length > 0;
 }
 }
 

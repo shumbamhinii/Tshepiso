@@ -16,9 +16,10 @@ import Sankey from 'highcharts/modules/sankey';
 import DependencyWheel from 'highcharts/modules/dependency-wheel';
 import Networkgraph from 'highcharts/modules/networkgraph';
 import Streamgraph from 'highcharts/modules/streamgraph';
+import SolidGauge from 'highcharts/modules/solid-gauge';
 import Sunburst from 'highcharts/modules/sunburst';
 import Variwide from 'highcharts/modules/variwide';
-import SolidGauge from 'highcharts/modules/solid-gauge';
+
 import Annotations from 'highcharts/modules/annotations';
 
 // Init order
