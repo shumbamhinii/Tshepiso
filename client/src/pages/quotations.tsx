@@ -10,6 +10,8 @@ import { ArrowLeft, Plus, Trash2, FileText, Download, Mail, Phone, DollarSign, T
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import html2pdf from 'html2pdf.js';
+import logoUrl from './logo.png';
+
 
 // Re-aligning Product interface with PricingProduct from PricingCalculator context
 interface Product {
@@ -612,14 +614,19 @@ export default function Quotations() {
           .footer { margin-top: 40px; font-size: 9px; text-align: center; }
           .footer p { margin: 2px 0; }
           .page-break { page-break-before: always; }
-          .logo { max-height: 50px; max-width: 150px; margin-bottom: 10px; } /* Adjust size as needed */
+          .logo { 
+  max-height: 100px;   /* increase height */
+  max-width: 250px;    /* increase width */
+  margin-bottom: 15px; 
+} /* Adjust size as needed */
         </style>
       </head>
       <body>
         <div class="page">
           <div class="header">
             <div class="company-info">
-              <img src="./pages/logo.png" alt="${companyDetails.name} Logo" class="logo" onerror="this.style.display='none';"> <!-- Logo -->
+              <img src="${logoUrl}" alt="${companyDetails.name} Logo" class="logo" crossorigin="anonymous" onerror="this.style.display='none';">
+
               <div class="company-name">${companyDetails.name}</div>
               <div class="company-address">${companyAddress}</div>
               <div class="company-contact">${companyContact}</div>
