@@ -1,9 +1,11 @@
+import React, { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { PricingTab, FinancialSubTab } from "@/types/pricing"; // Import FinancialSubTab
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { PricingTab, FinancialSubTab } from "@/types/pricing";
 import {
   Settings,
   Package,
-  TrendingUp,
   FlaskConical,
   Users,
   Wallet,
@@ -12,42 +14,51 @@ import {
   Save,
   BrainIcon,
   Folder,
-  DollarSign, // Icon for Financial Management
-  Banknote, // Icon for Transactions
-  FileInput, // Icon for Import Data
-  BarChart3, // Icon for Financial Reports
-  ChevronDown, // Icon for dropdown/expandable
-  ChevronUp,
   LayoutDashboard,
-  BoxSelectIcon,   // Icon for dropdown/collapsible
+  BoxSelectIcon,
+  Lock,
 } from "lucide-react";
 import { FileSpreadsheet } from "lucide-react";
 import SuppliersTab from "./SuppliersTab";
-// Removed: import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"; // No longer needed for this style
+
+// ---------- Password storage (client-only) ----------
+type Area = "pricing" | "quotations";
+const AUTH = { pricing: "tb_auth_pricing", quotations: "tb_auth_quotations" } as const;
+const PWD  = { pricing: "tb_pwd_pricing", quotations: "tb_pwd_quotations" } as const;
+
+function ensureDefaults() {
+  if (!localStorage.getItem(PWD.pricing)) localStorage.setItem(PWD.pricing, "pricing123");
+  if (!localStorage.getItem(PWD.quotations)) localStorage.setItem(PWD.quotations, "quotes123");
+}
+// ----------------------------------------------------
 
 interface SidebarNavigationProps {
   activeTab: PricingTab;
-  onTabChange: (mainTab: PricingTab, subTab?: FinancialSubTab) => void; // Updated signature
+  onTabChange: (mainTab: PricingTab, subTab?: FinancialSubTab) => void;
   onBack?: () => void;
   onSave?: () => void;
   isSaving?: boolean;
-  activeFinancialSubTab?: FinancialSubTab; // New prop to indicate active sub-tab
+  activeFinancialSubTab?: FinancialSubTab;
 }
 
-const tabs = [
-  {id: 'dashboard' as PricingTab, label: 'Dashboard', icon: LayoutDashboard},
-  { id: 'setup' as PricingTab, label: 'Setup', icon: Settings },
-  { id: 'products' as PricingTab, label: 'Pricing', icon: Package },
-  //{ id: 'results' as PricingTab, label: 'Pricing', icon: TrendingUp },
-  { id: 'suppliers' as PricingTab, label: 'Suppliers', icon: BoxSelectIcon  },
-  { id: 'scenarios' as PricingTab, label: 'What-If Scenarios', icon: FlaskConical },
-  { id: 'competitors' as PricingTab, label: 'Competitor Pricing', icon: Users },
-  { id: 'budget' as PricingTab, label: 'Budget', icon: Wallet },
-  { id: 'snapshots' as PricingTab, label: 'Snapshot Manager', icon: Camera },
-  { id: 'projects' as PricingTab, label: 'Projects', icon: Folder },
+// If your PricingTab type doesn’t include 'security', we cast to keep TS happy.
+const SECURITY_TAB = "security" as unknown as PricingTab;
 
-  { id: 'tenders' as PricingTab, label: 'Tender Management', icon: FileSpreadsheet },
-  { id: 'pricingchat' as PricingTab, label: 'Pricing Chat', icon: BrainIcon },
+const tabs = [
+  { id: 'dashboard'  as PricingTab, label: 'Dashboard',           icon: LayoutDashboard },
+  { id: 'setup'      as PricingTab, label: 'Setup',               icon: Settings },
+  { id: 'products'   as PricingTab, label: 'Pricing',             icon: Package },
+  { id: 'suppliers'  as PricingTab, label: 'Suppliers',           icon: BoxSelectIcon  },
+  { id: 'scenarios'  as PricingTab, label: 'What-If Scenarios',   icon: FlaskConical },
+  { id: 'competitors'as PricingTab, label: 'Competitor Pricing',  icon: Users },
+  { id: 'budget'     as PricingTab, label: 'Budget',              icon: Wallet },
+  { id: 'snapshots'  as PricingTab, label: 'Snapshot Manager',    icon: Camera },
+  { id: 'projects'   as PricingTab, label: 'Projects',            icon: Folder },
+  { id: 'tenders'    as PricingTab, label: 'Tender Management',   icon: FileSpreadsheet },
+  { id: 'pricingchat'as PricingTab, label: 'Pricing Chat',        icon: BrainIcon },
+
+  // NEW: Change Passwords tab (client-only)
+  { id: SECURITY_TAB,              label: 'Change Passwords',     icon: Lock },
 ];
 
 export default function SidebarNavigation({
@@ -58,7 +69,44 @@ export default function SidebarNavigation({
   isSaving,
   activeFinancialSubTab
 }: SidebarNavigationProps) {
-  //console.log("SidebarNavigation: onBack prop value:", onBack);
+
+  // Local state for the security tab
+  const [pricingPwd, setPricingPwd] = useState("");
+  const [quotesPwd, setQuotesPwd] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Ensure defaults exist on first load
+    ensureDefaults();
+  }, []);
+
+  const savePwd = (area: Area, value: string) => {
+    setStatus(null);
+    if (!value || value.length < 4) {
+      setStatus("Password too short (min 4 characters).");
+      return;
+    }
+    localStorage.setItem(PWD[area], value);
+    // Force re-login for that area next time
+    localStorage.removeItem(AUTH[area]);
+    setStatus(`Password updated for ${area}. Users must re-enter it next visit.`);
+    if (area === "pricing") setPricingPwd("");
+    if (area === "quotations") setQuotesPwd("");
+  };
+
+  const resetDefaults = () => {
+    localStorage.setItem(PWD.pricing, "pricing123");
+    localStorage.setItem(PWD.quotations, "quotes123");
+    localStorage.removeItem(AUTH.pricing);
+    localStorage.removeItem(AUTH.quotations);
+    setStatus("Reset to defaults. You’ll be asked again next visit.");
+  };
+
+  const forceReprompt = () => {
+    localStorage.removeItem(AUTH.pricing);
+    localStorage.removeItem(AUTH.quotations);
+    setStatus("Cleared unlock flags. You’ll be prompted again for both areas.");
+  };
 
   return (
     <aside className="pricing-sidebar">
@@ -83,62 +131,73 @@ export default function SidebarNavigation({
       <nav className="flex-1 p-4">
         <div className="space-y-2">
           {tabs.map((tab) => {
-            const Icon = tab.icon;
+            const Icon = tab.icon as React.ComponentType<any>;
             const isActive = activeTab === tab.id;
 
-            if (tab.subTabs) {
-              // Render as an expandable section
-              const isFinancialsActive = activeTab === tab.id;
-              const ChevronIcon = isFinancialsActive ? ChevronUp : ChevronDown; // Change icon based on active state
-
-              return (
-                <div key={tab.id} className="space-y-1">
-                  <button
-                    onClick={() => onTabChange(tab.id)} // Click to activate/toggle parent tab
-                    className={`pricing-tab-button w-full justify-between ${isFinancialsActive ? 'active' : ''}`}
-                  >
-                    <span className="flex items-center">
-                      <Icon className="w-4 h-4 mr-3" />
-                      <span className="text-sm">{tab.label}</span>
-                    </span>
-                    <ChevronIcon className="w-4 h-4 ml-2" /> {/* Chevron icon */}
-                  </button>
-                  {isFinancialsActive && ( // Render sub-tabs only if parent is active
-                    <div className="ml-6 space-y-1"> {/* Indent sub-tabs */}
-                      {tab.subTabs.map((subTab) => {
-                        const SubIcon = subTab.icon;
-                        const isSubTabActive = activeFinancialSubTab === subTab.id; // Check if this specific sub-tab is active
-                        return (
-                          <button
-                            key={subTab.id}
-                            onClick={() => onTabChange(tab.id, subTab.id)} // Pass both main and sub-tab ID
-                            className={`pricing-tab-button w-full justify-start text-sm ${isSubTabActive ? 'active' : ''}`}
-                          >
-                            <SubIcon className="w-4 h-4 mr-2" />
-                            {subTab.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            } else {
-              // Render as a regular button
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => onTabChange(tab.id)} // Only pass main tab ID
-                  className={`pricing-tab-button ${isActive ? 'active' : ''}`}
-                >
-                  <Icon className="w-4 h-4 mr-3" />
-                  <span className="text-sm">{tab.label}</span>
-                  {isActive && <div className="pricing-tab-indicator" />}
-                </button>
-              );
-            }
+            return (
+              <button
+                key={tab.id as string}
+                onClick={() => onTabChange(tab.id)}
+                className={`pricing-tab-button ${isActive ? 'active' : ''}`}
+              >
+                <Icon className="w-4 h-4 mr-3" />
+                <span className="text-sm">{tab.label}</span>
+                {isActive && <div className="pricing-tab-indicator" />}
+              </button>
+            );
           })}
         </div>
+
+        {/* Inline content for the Change Passwords tab */}
+        {activeTab === SECURITY_TAB && (
+          <div className="mt-6 space-y-6 rounded-lg border border-sidebar-border p-4">
+            <div>
+              <h2 className="text-sm font-semibold mb-2 flex items-center gap-2">
+                <Lock className="w-4 h-4" /> Change Passwords (client-only)
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                These passwords are stored in your browser’s localStorage for simplicity. For production-grade security, move them server-side.
+              </p>
+            </div>
+
+            <div className="grid gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="pricing_new">New Pricing Password</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="pricing_new"
+                    type="password"
+                    value={pricingPwd}
+                    onChange={(e) => setPricingPwd(e.target.value)}
+                    placeholder="•••••••"
+                  />
+                  <Button onClick={() => savePwd("pricing", pricingPwd)}>Save</Button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="quotes_new">New Quotations Password</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="quotes_new"
+                    type="password"
+                    value={quotesPwd}
+                    onChange={(e) => setQuotesPwd(e.target.value)}
+                    placeholder="•••••••"
+                  />
+                  <Button onClick={() => savePwd("quotations", quotesPwd)}>Save</Button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button variant="secondary" onClick={resetDefaults}>Reset to defaults</Button>
+                <Button variant="ghost" onClick={forceReprompt}>Force re-prompt</Button>
+              </div>
+
+              {status && <p className="text-xs">{status}</p>}
+            </div>
+          </div>
+        )}
       </nav>
 
       {/* Footer Actions */}
