@@ -12,7 +12,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 async function ensureEnvLoaded() {
-  if (process.env.DATABASE_URL) return;
+  if (process.env.NODE_ENV !== 'production') {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
 
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
