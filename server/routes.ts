@@ -19,8 +19,26 @@ import {
   insertSupplierSchema, // NEW: Import the new insertSupplierSchema
   insertTenderSchema, // NEW: Import the new insertTenderSchema
 } from "@shared/schema";
+
+import {
+  // tables
+  bankAccounts,
+  terms as termsTable,
+  sequences,
+
+  // zod payloads
+  insertBankAccountSchema,
+  insertTermsSchema,
+  sequenceTypeSchema,
+} from "@shared/schema";
+import { db } from "./db"; // <-- if you already have this elsewhere, keep that
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { sendEmail } from "./emailService"; // NEW: Import the email service
+import fs from "fs";
+import path from "path";
+import bcrypt from "bcryptjs";
+import { verifyAccessPasswordSchema, insertAccessPasswordSchema } from "@shared/schema";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // --- Existing Master Products routes (keep as is) ---
@@ -1082,6 +1100,243 @@ app.delete('/api/tenders/:id', async (req, res, next) => {
     next(error);
   }
 });
+
+
+
+
+type Area = "pricing" | "quotations";
+
+const VerifySchema = z.object({
+  area: z.enum(["pricing", "quotations"]),
+  password: z.string().min(1),
+});
+
+const SetSchema = z.object({
+  area: z.enum(["pricing", "quotations"]),
+  newPassword: z.string().min(6),
+});
+
+async function getAccessHash(area: Area) {
+  const rows = await db
+    .select({ hash: accessPasswords.hash })
+    .from(accessPasswords)
+    .where(eq(accessPasswords.area, area))
+    .limit(1);
+  return rows[0]?.hash ?? null;
+}
+
+async function setAccessPasswordDB(area: Area, plain: string) {
+  const hash = await bcrypt.hash(plain, 10);
+  // upsert by area
+  await db
+    .insert(accessPasswords)
+    .values({ area, hash })
+    .onConflictDoUpdate({
+      target: accessPasswords.area,
+      set: { hash, updatedAt: new Date() },
+    });
+  return true;
+}
+
+async function verifyAccessPasswordDB(area: Area, plain: string) {
+  const hash = await getAccessHash(area);
+  return hash ? bcrypt.compare(plain, hash) : false;
+}
+
+// Verify (used by Home.tsx modal)
+app.post("/api/passwords/verify", async (req, res, next) => {
+  try {
+    const { area, password } = verifyAccessPasswordSchema.parse(req.body || {});
+    const ok = await storage.verifyAccessPassword(area, password);
+    if (!ok) return res.status(401).json({ ok: false, message: "Incorrect password" });
+    res.json({ ok: true });
+  } catch (e) {
+    if (e instanceof z.ZodError) return res.status(400).json({ ok:false, message:"Validation error", errors:e.errors });
+    next(e);
+  }
+});
+
+app.post("/api/passwords/set", async (req, res, next) => {
+  try {
+    const adminKey = req.header("x-admin-key");
+    if (!process.env.ADMIN_PANEL_KEY || adminKey !== process.env.ADMIN_PANEL_KEY) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const { area, newPassword } = insertAccessPasswordSchema.parse(req.body || {});
+    await storage.setAccessPassword(area, newPassword);
+    res.json({ message: `Password updated for ${area}` });
+  } catch (e) {
+    if (e instanceof z.ZodError) return res.status(400).json({ message:"Validation error", errors:e.errors });
+    next(e);
+  }
+});
+
+// --- NEW: Bank Accounts Routes ---
+
+// List bank accounts (optionally filter ?active=true/false)
+app.get("/api/bank-accounts", async (req, res, next) => {
+  try {
+    const activeParam = String(req.query.active ?? "").toLowerCase();
+    let rows = await db.select().from(bankAccounts);
+
+    if (activeParam === "true") {
+      rows = rows.filter((r) => r.isActive === true);
+    } else if (activeParam === "false") {
+      rows = rows.filter((r) => r.isActive === false);
+    }
+
+    res.json(rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Create bank account
+app.post("/api/bank-accounts", async (req, res, next) => {
+  try {
+    const data = insertBankAccountSchema.parse(req.body);
+    const [row] = await db.insert(bankAccounts).values(data).returning();
+    res.status(201).json(row);
+  } catch (e) {
+    if (e instanceof z.ZodError) {
+      return res.status(400).json({ message: "Validation error", errors: e.errors });
+    }
+    next(e);
+  }
+});
+
+// Update bank account
+app.put("/api/bank-accounts/:id", async (req, res, next) => {
+  try {
+    const id = String(req.params.id);
+    const data = insertBankAccountSchema.partial().parse(req.body);
+    const [row] = await db.update(bankAccounts).set(data).where(eq(bankAccounts.id, id)).returning();
+    if (!row) return res.status(404).json({ message: "Bank account not found" });
+    res.json(row);
+  } catch (e) {
+    if (e instanceof z.ZodError) {
+      return res.status(400).json({ message: "Validation error", errors: e.errors });
+    }
+    next(e);
+  }
+});
+
+// Delete bank account
+app.delete("/api/bank-accounts/:id", async (req, res, next) => {
+  try {
+    const id = String(req.params.id);
+    const [row] = await db.delete(bankAccounts).where(eq(bankAccounts.id, id)).returning();
+    if (!row) return res.status(404).json({ message: "Bank account not found" });
+    res.status(204).send();
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Toggle active
+app.post("/api/bank-accounts/:id/toggle", async (req, res, next) => {
+  try {
+    const id = String(req.params.id);
+    const existing = await db.select().from(bankAccounts).where(eq(bankAccounts.id, id)).limit(1);
+    if (!existing[0]) return res.status(404).json({ message: "Bank account not found" });
+
+    const [row] = await db
+      .update(bankAccounts)
+      .set({ isActive: !existing[0].isActive })
+      .where(eq(bankAccounts.id, id))
+      .returning();
+
+    res.json(row);
+  } catch (e) {
+    next(e);
+  }
+});
+
+// --- NEW: Terms & Conditions Routes ---
+
+app.get("/api/terms", async (_req, res, next) => {
+  try {
+    const [row] = await db.select().from(termsTable).where(eq(termsTable.id, "singleton")).limit(1);
+    // If DB bootstrap hasn’t inserted it yet, return an empty default
+    res.json(row ?? { id: "singleton", body: "", createdAt: new Date(), updatedAt: new Date() });
+  } catch (e) {
+    next(e);
+  }
+});
+
+app.put("/api/terms", async (req, res, next) => {
+  try {
+    const { body } = insertTermsSchema.pick({ body: true }).parse(req.body);
+    const [row] = await db
+      .update(termsTable)
+      .set({ body, updatedAt: new Date() })
+      .where(eq(termsTable.id, "singleton"))
+      .returning();
+
+    // If the row somehow didn’t exist, create it
+    if (!row) {
+      const [created] = await db
+        .insert(termsTable)
+        .values({ id: "singleton", body })
+        .returning();
+      return res.json(created);
+    }
+    res.json(row);
+  } catch (e) {
+    if (e instanceof z.ZodError) {
+      return res.status(400).json({ message: "Validation error", errors: e.errors });
+    }
+    next(e);
+  }
+});
+
+// --- NEW: Sequences Routes ---
+
+// Peek the next number WITHOUT incrementing
+// GET /api/sequences/peek?type=quotation|invoice
+app.get("/api/sequences/peek", async (req, res, next) => {
+  try {
+    const type = (String(req.query.type || "quotation") as "quotation" | "invoice");
+    if (!["quotation", "invoice"].includes(type)) {
+      return res.status(400).json({ message: "Invalid type. Use 'quotation' or 'invoice'." });
+    }
+
+    const [row] = await db.select().from(sequences).where(eq(sequences.id, type)).limit(1);
+    const nextVal = row ? row.current + 1 : 1;
+    res.json({ next: nextVal });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Atomically get the next number AND increment counter
+// POST /api/sequences/next  { "type": "quotation" | "invoice" }
+app.post("/api/sequences/next", async (req, res, next) => {
+  try {
+    const { type } = sequenceTypeSchema.parse(req.body); // validates to 'quotation' | 'invoice'
+    // Call the DB function we created in SQL: tbs.next_sequence(text)
+    // Drizzle .execute() returns driver-specific rows; destructure accordingly.
+    const result: any = await db.execute(`SELECT tbs.next_sequence($1) AS next`, [type]);
+    // For node-postgres, the row is usually at result.rows[0]
+    const nextValue =
+      (result?.rows && result.rows[0]?.next) ??
+      (Array.isArray(result) && result[0]?.next) ??
+      null;
+
+    if (nextValue == null) {
+      return res.status(500).json({ message: "Could not get next sequence value" });
+    }
+
+    res.json({ next: Number(nextValue) });
+  } catch (e) {
+    if (e instanceof z.ZodError) {
+      return res.status(400).json({ message: "Validation error", errors: e.errors });
+    }
+    next(e);
+  }
+});
+
+
 
   const httpServer = createServer(app);
   return httpServer;

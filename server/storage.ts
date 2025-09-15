@@ -44,8 +44,9 @@ import {
   expenses, // Assuming you still use expenses
   type Expense,
   type InsertExpense,
-
+  accessPasswords,
 } from "@shared/schema";
+import bcrypt from "bcryptjs";
 
 // Define the IStorage interface to include methods for the new tables
 export interface IStorage {
@@ -544,6 +545,28 @@ async createTender(insertTender: InsertTender): Promise<Tender> {
   };
 }
 
+async setAccessPassword(area: "pricing" | "quotations", plain: string): Promise<void> {
+  const hash = await bcrypt.hash(plain, 10);
+  await db
+    .insert(accessPasswords)
+    .values({ area, hash, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: accessPasswords.area,
+      set: { hash, updatedAt: new Date() },
+    });
+}
+
+async verifyAccessPassword(area: "pricing" | "quotations", plain: string): Promise<boolean> {
+  const row = await db
+    .select({ hash: accessPasswords.hash })
+    .from(accessPasswords)
+    .where(eq(accessPasswords.area, area))
+    .limit(1);
+
+  const hash = row[0]?.hash;
+  if (!hash) return false;
+  return bcrypt.compare(plain, hash);
+}
 async updateTender(id: number, updateData: Partial<InsertTender>): Promise<Tender> {
   // Stringify 'items' if it's part of the update data
   const payload = { ...updateData } as any;
@@ -567,6 +590,9 @@ async deleteTender(id: number): Promise<boolean> {
   const result = await db.delete(tenders).where(eq(tenders.id, id)).returning({ id: tenders.id });
   return result.length > 0;
 }
+
+
+
 }
 
 export const storage = new PgStorage();

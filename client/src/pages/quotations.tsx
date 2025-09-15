@@ -1,98 +1,75 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, Plus, Trash2, FileText, Download, Mail, Phone, DollarSign, Tag, List, ReceiptText, SquarePen, Send, Eye, Loader2, Settings } from "lucide-react";
-import { Link } from "wouter";
-import { useToast } from "@/hooks/use-toast";
-import html2pdf from 'html2pdf.js';
+// src/pages/Quotations.tsx
+// React UI — supports promotions/discounts, multiple bank accounts (CRUD via API),
+// editable terms (plain/HTML with preview), and human-readable numbering using /api/sequences.
 
-// Re-aligning Product interface with PricingProduct from PricingCalculator context
-interface Product {
-  id: number;
-  name: string;
-  expectedUnits: number;
-  costPerUnit: number;
-  price: number;
-  notes?: string;
-}
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'wouter';
+import { useToast } from '@/hooks/use-toast';
 
-interface QuotedProduct extends Product {
-  quoteId: string;
-  originalId: number;
-  quantity: number;
-  sellingPrice: number;
-}
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
 
-// --- New Interfaces for Saved Data ---
-interface QuotationRecord {
-  id: string;
-  customerName: string;
-  customerEmail: string;
-  customerPhone: string;
-  quoteDate: string;
-  validUntil: string;
-  quotedProducts: QuotedProduct[];
-  designCost: number;
-  sampleCost: number;
-  handlingCost: number;
-  grandTotal: number;
-  status: 'draft' | 'sent' | 'accepted' | 'rejected' | 'converted_to_invoice' | 'expired';
-  createdAt: string;
-  updatedAt: string;
-}
+import {
+  ArrowLeft, Plus, Trash2, FileText, Download, Mail, Tag,
+  List, ReceiptText, SquarePen, Loader2, Settings, DollarSign
+} from 'lucide-react';
 
-interface InvoiceRecord extends QuotationRecord {
-  invoiceNumber: string;
-  issueDate: string;
-  dueDate: string;
-  paymentStatus: 'pending' | 'paid' | 'overdue' | 'cancelled';
-  relatedQuotationId: string | null;
-}
-// --- End New Interfaces ---
+import logoUrl from './logo.png';
 
-// --- Interface for Banking Details ---
-interface BankingDetails {
-  bankName: string;
-  bankAccountNumber: string;
-  bankBranchCode: string;
-}
-// --- End Interface for Banking Details ---
+import {
+  Product, QuotedProduct, QuotationRecord, InvoiceRecord,
+  CompanyDetails, PaymentStatus, QuoteStatus,
+  BankAccount, Promotion, DiscountType,
+  calculateLineTotal, calculateTotals,
+  buildDocumentHtml, downloadPdfFromHtml, buildHumanDocName
+} from './quote-invoice-utils';
 
 export default function Quotations() {
   const { toast } = useToast();
 
-  // --- Refs for PDF generation ---
+  // --- Refs (kept for future preview use)
   const quotationPreviewRef = useRef<HTMLDivElement>(null);
   const invoicePreviewRef = useRef<HTMLDivElement>(null);
 
-  // --- State for Company Details ---
-  const [companyDetails, setCompanyDetails] = useState({
-    name: "Tshepiso Branding Solutions(Pty) Ltd",
-    addressLine1: "11 Enterprise Close",
-    addressLine2: "Linbro Business Park Malboro Gardens",
-    city: "Sandton",
-    province: "Gauteng",
-    postalCode: "2090",
-    country: "South Africa",
-    phone: "0685999595",
-    website: "www.tshepisobranding.co.za",
-    vatNumber: "4550116778",
-    registrationNumber: "1962/004313/07",
+  // --- Company Details
+  const [companyDetails, setCompanyDetails] = useState<CompanyDetails>({
+    name: 'Tshepiso Branding Solutions(Pty) Ltd',
+    addressLine1: '11 Enterprise Close',
+    addressLine2: 'Linbro Business Park Malboro Gardens',
+    city: 'Sandton',
+    province: 'Gauteng',
+    postalCode: '2090',
+    country: 'South Africa',
+    phone: '0685999595',
+    website: 'www.tshepisobranding.co.za',
+    vatNumber: '4550116778',
+    registrationNumber: '1962/004313/07'
   });
 
-  // --- State for Banking Details ---
-  const [bankingDetails, setBankingDetails] = useState<BankingDetails>({
-    bankName: "ABSA",
-    bankAccountNumber: "409 7457 454",
-    bankBranchCode: "632005",
+  // --- Bank Accounts (multiple)
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [selectedBankAccountIds, setSelectedBankAccountIds] = useState<string[]>([]);
+
+  // --- New bank account form (Settings)
+  const [newBank, setNewBank] = useState<Omit<BankAccount, 'id'>>({
+    label: '',
+    bankName: '',
+    bankAccountNumber: '',
+    bankBranchCode: '',
+    isActive: true,
   });
 
-  // --- State for current quotation form ---
+  // --- Terms (authoring-friendly)
+  const [termsInput, setTermsInput] = useState<string>(''); // user edits here
+  const [termsMode, setTermsMode] = useState<'plain' | 'html'>('plain'); // authoring mode
+  const [isSavingTerms, setIsSavingTerms] = useState(false); // moved to parent so editor isn't stateful child
+
+  // --- Current form data
   const [customerName, setCustomerName] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
@@ -102,106 +79,164 @@ export default function Quotations() {
   const [availableProducts, setAvailableProducts] = useState<Product[]>([]);
   const [quotedProducts, setQuotedProducts] = useState<QuotedProduct[]>([]);
   const [selectedProductId, setSelectedProductId] = useState('');
+
+  // Costs
   const [designCost, setDesignCost] = useState(0);
   const [sampleCost, setSampleCost] = useState(0);
   const [handlingCost, setHandlingCost] = useState(0);
-  const [termsAccepted, setTermsAccepted] = useState(false);
 
-  // --- State for managing saved quotations and invoices ---
+  // Promotion / discount
+  const [promo, setPromo] = useState<Promotion | undefined>(undefined);
+
+  // Stored lists
   const [quotationsList, setQuotationsList] = useState<QuotationRecord[]>([]);
   const [invoicesList, setInvoicesList] = useState<InvoiceRecord[]>([]);
-  const [currentView, setCurrentView] = useState<'create-quote' | 'list-quotes' | 'list-invoices' | 'edit-quote' | 'edit-invoice' | 'view-quote' | 'view-invoice' | 'edit-banking'>('create-quote');
+
+  const [currentView, setCurrentView] = useState<
+    'create-quote' | 'list-quotes' | 'list-invoices' | 'edit-quote' | 'edit-invoice' | 'edit-banking'
+  >('create-quote');
+
   const [editingQuotationId, setEditingQuotationId] = useState<string | null>(null);
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
 
-  // --- Loading states for API calls ---
+  // Loading flags
   const [isSendingDocument, setIsSendingDocument] = useState(false);
   const [isDeletingQuotation, setIsDeletingQuotation] = useState(false);
   const [isDeletingInvoice, setIsDeletingInvoice] = useState(false);
 
-  // --- Load company details, banking details, and data from localStorage on mount ---
+  // Sequence peeks (optional UI use)
+  const [nextQuotationNumber, setNextQuotationNumber] = useState<number | null>(null);
+  const [nextInvoiceNumber, setNextInvoiceNumber] = useState<number | null>(null);
+
+  // ---------- Helpers for terms ----------
+  function escapeHtml(s: string) {
+    return s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+  function nl2brHtml(s: string) {
+    // Convert blank lines to paragraph breaks and single newlines to <br>
+    const parts = s.split(/\n{2,}/).map(p =>
+      `<p>${escapeHtml(p).replace(/\n/g, '<br/>')}</p>`
+    );
+    return parts.join('\n');
+  }
+
+  const finalTermsHtml = useMemo(
+    () => (termsMode === 'plain' ? nl2brHtml(termsInput) : termsInput),
+    [termsMode, termsInput]
+  );
+
+  // --- Initial load (localStorage)
   useEffect(() => {
-    // Load company details from localStorage
-    const storedCompanyDetails = localStorage.getItem('companyDetails');
-    if (storedCompanyDetails) {
-      try {
-        setCompanyDetails(JSON.parse(storedCompanyDetails));
-      } catch (e) {
-        console.error("Failed to parse company details from localStorage", e);
-      }
-    }
+    try {
+      const storedCompanyDetails = localStorage.getItem('companyDetails');
+      if (storedCompanyDetails) setCompanyDetails(JSON.parse(storedCompanyDetails));
 
-    // Load banking details from localStorage
-    const storedBankingDetails = localStorage.getItem('bankingDetails');
-    if (storedBankingDetails) {
-      try {
-        setBankingDetails(JSON.parse(storedBankingDetails));
-      } catch (e) {
-        console.error("Failed to parse banking details from localStorage", e);
-        // Initialize with defaults if parsing fails
-        setBankingDetails({
-          bankName: "ABSA",
-          bankAccountNumber: "409 7457 454",
-          bankBranchCode: "632005",
-        });
-      }
-    } else {
-        // Initialize with defaults if not found
-        setBankingDetails({
-          bankName: "ABSA",
-          bankAccountNumber: "409 7457 454",
-          bankBranchCode: "632005",
-        });
-    }
+      const storedSnapshotId = localStorage.getItem('selectedQuotationSnapshotId');
+      if (storedSnapshotId) setSelectedSnapshotId(storedSnapshotId);
 
-    const storedSnapshotId = localStorage.getItem('selectedQuotationSnapshotId');
-    const storedProducts = localStorage.getItem('selectedQuotationProducts');
-    const storedQuotations = localStorage.getItem('quotations');
-    const storedInvoices = localStorage.getItem('invoices');
-
-    if (storedSnapshotId) {
-      setSelectedSnapshotId(storedSnapshotId);
-    }
-    if (storedProducts) {
-      try {
+      const storedProducts = localStorage.getItem('selectedQuotationProducts');
+      if (storedProducts) {
         const parsedProducts: any[] = JSON.parse(storedProducts);
-        const mappedProducts: Product[] = parsedProducts.map((p: any) => ({
+        const mapped: Product[] = parsedProducts.map((p: any) => ({
           id: Number(p.id),
           name: p.name || 'Unnamed Product',
           price: parseFloat(p.suggestedPrice || p.price || 0),
           costPerUnit: parseFloat(p.costPerUnit || p.cost_per_unit || 0),
-          expectedUnits: parseInt(p.expectedUnits || p.expected_units || 1),
+          expectedUnits: parseInt(p.expectedUnits || p.expected_units || 1, 10),
           notes: p.notes || ''
         }));
-        setAvailableProducts(mappedProducts);
-      } catch (error) {
-        console.error('Error loading products from localStorage:', error);
-        toast({
-          title: "Error loading products",
-          description: "Could not load products from the selected snapshot.",
-          variant: "destructive"
-        });
+        setAvailableProducts(mapped);
       }
-    }
-    if (storedQuotations) {
-      setQuotationsList(JSON.parse(storedQuotations));
-    }
-    if (storedInvoices) {
-      setInvoicesList(JSON.parse(storedInvoices));
+
+      const storedQuotations = localStorage.getItem('quotations');
+      if (storedQuotations) setQuotationsList(JSON.parse(storedQuotations));
+
+      const storedInvoices = localStorage.getItem('invoices');
+      if (storedInvoices) setInvoicesList(JSON.parse(storedInvoices));
+    } catch (e) {
+      console.error(e);
+      toast({
+        title: 'Error loading data',
+        description: 'Some saved data could not be loaded.',
+        variant: 'destructive'
+      });
     }
   }, [toast]);
 
-  // --- Save company details to localStorage whenever they change ---
+  // --- Load Terms once (API -> fallback to localStorage)
+  useEffect(() => {
+    (async () => {
+      try {
+        const tRes = await fetch('/api/terms');
+        if (tRes.ok) {
+          const terms = await tRes.json();
+          setTermsInput(terms.body || '');
+          setTermsMode('plain'); // author in plain by default
+        } else {
+          const ls = localStorage.getItem('termsHtml');
+          if (ls) {
+            setTermsInput(ls);
+            setTermsMode('plain');
+          }
+        }
+      } catch {
+        // ignore
+      }
+    })();
+  }, []);
+
+  // --- Load bank accounts + sequences (fallback gracefully)
+  useEffect(() => {
+    (async () => {
+      try {
+        // bank accounts
+        const baRes = await fetch('/api/bank-accounts');
+        if (baRes.ok) {
+          const list: BankAccount[] = await baRes.json();
+          setBankAccounts(list);
+
+          if (list?.length) {
+            // default: all active accounts; if none active, pick the first
+            const actives = list.filter(b => b.isActive).map(b => b.id);
+            setSelectedBankAccountIds(actives.length ? actives : [list[0].id]);
+          }
+        } else {
+          // fallback to legacy single account in localStorage if present
+          const legacy = localStorage.getItem('bankingDetails');
+          if (legacy) {
+            const one = JSON.parse(legacy);
+            const generated: BankAccount = {
+              id: 'legacy',
+              bankName: one.bankName,
+              bankAccountNumber: one.bankAccountNumber,
+              bankBranchCode: one.bankBranchCode,
+              label: 'Main',
+              isActive: true,
+            };
+            setBankAccounts([generated]);
+            setSelectedBankAccountIds(['legacy']);
+          }
+        }
+
+        // sequences (peek next)
+        const qRes = await fetch('/api/sequences/peek?type=quotation');
+        if (qRes.ok) setNextQuotationNumber((await qRes.json()).next);
+        const iRes = await fetch('/api/sequences/peek?type=invoice');
+        if (iRes.ok) setNextInvoiceNumber((await iRes.json()).next);
+      } catch {
+        // ignore; UI still works with fallbacks
+      }
+    })();
+  }, []);
+
+  // --- Persist lists + company details to localStorage
   useEffect(() => {
     localStorage.setItem('companyDetails', JSON.stringify(companyDetails));
   }, [companyDetails]);
 
-  // --- Save banking details to localStorage whenever they change ---
-  useEffect(() => {
-    localStorage.setItem('bankingDetails', JSON.stringify(bankingDetails));
-  }, [bankingDetails]);
-
-  // --- Save data to localStorage whenever lists change ---
   useEffect(() => {
     localStorage.setItem('quotations', JSON.stringify(quotationsList));
   }, [quotationsList]);
@@ -210,99 +245,79 @@ export default function Quotations() {
     localStorage.setItem('invoices', JSON.stringify(invoicesList));
   }, [invoicesList]);
 
-  // --- Auto-update status based on dates ---
+  // --- Auto status updates
   useEffect(() => {
     const now = new Date();
-    const today = now.toISOString().split('T')[0];
 
-    // Update quotation statuses
-    setQuotationsList(prevQuotes => {
-      let updated = false;
-      const newQuotes = prevQuotes.map(quote => {
-        if (quote.status !== 'expired' && quote.validUntil && new Date(quote.validUntil) < now) {
-          updated = true;
-          return { ...quote, status: 'expired', updatedAt: new Date().toISOString() };
+    setQuotationsList(prev => {
+      let changed = false;
+      const next = prev.map(q => {
+        if (q.status !== 'expired' && q.validUntil && new Date(q.validUntil) < now) {
+          changed = true;
+          return { ...q, status: 'expired' as QuoteStatus, updatedAt: new Date().toISOString() };
         }
-        return quote;
+        return q;
       });
-      return updated ? newQuotes : prevQuotes;
+      return changed ? next : prev;
     });
 
-    // Update invoice statuses
-    setInvoicesList(prevInvoices => {
-      let updated = false;
-      const newInvoices = prevInvoices.map(invoice => {
-        if (invoice.paymentStatus === 'pending' && invoice.dueDate && new Date(invoice.dueDate) < now) {
-          updated = true;
-          return { ...invoice, paymentStatus: 'overdue', updatedAt: new Date().toISOString() };
+    setInvoicesList(prev => {
+      let changed = false;
+      const next = prev.map(inv => {
+        if (inv.paymentStatus === 'pending' && inv.dueDate && new Date(inv.dueDate) < now) {
+          changed = true;
+          return { ...inv, paymentStatus: 'overdue' as PaymentStatus, updatedAt: new Date().toISOString() };
         }
-        return invoice;
+        return inv;
       });
-      return updated ? newInvoices : prevInvoices;
+      return changed ? next : prev;
     });
   }, [quotationsList.length, invoicesList.length]);
 
-  // --- Calculations (Ensure correct order) ---
-  const calculateLineTotal = (product: QuotedProduct) => {
-    return product.sellingPrice * product.quantity;
-  };
+  // --- Totals (VAT-inclusive) with promo
+  const totals = useCallback(
+    () =>
+      calculateTotals({
+        items: quotedProducts,
+        designCost,
+        sampleCost,
+        handlingCost,
+        vatRate: 0.15,
+        promo,
+      }),
+    [quotedProducts, designCost, sampleCost, handlingCost, promo]
+  );
 
-  // 1. First, define calculateSubtotal
-  const calculateSubtotal = useCallback(() => {
-    return quotedProducts.reduce((sum, p) => sum + calculateLineTotal(p), 0);
-  }, [quotedProducts]); // Assuming calculateLineTotal is stable
-
-  // 2. Second, define calculateGrandTotal
-  const calculateGrandTotal = useCallback(() => {
-    return calculateSubtotal() + designCost + sampleCost + handlingCost;
-  }, [calculateSubtotal, designCost, sampleCost, handlingCost]);
-
-  // 3. Finally, define calculateVatAndSubtotal
-  const calculateVatAndSubtotal = useCallback(() => {
-    const grandTotal = calculateGrandTotal();
-    const vatRate = 0.15;
-    const vatAmount = grandTotal * vatRate / (1 + vatRate);
-    const subtotalAmount = grandTotal - vatAmount;
-    return { vatAmount, subtotalAmount };
-  }, [calculateGrandTotal]);
-
-  // --- Form Actions ---
+  // --- Product handlers
   const handleAddProduct = () => {
     if (!selectedProductId) return;
     const product = availableProducts.find(p => String(p.id) === selectedProductId);
     if (!product) return;
-
     if (quotedProducts.some(p => p.originalId === product.id)) {
       toast({
-        title: "Product already added",
-        description: `"${product.name}" is already in your quote.`,
-        variant: "warning"
+        title: 'Product already added',
+        description: `"${product.name}" is already in your list.`,
+        variant: 'warning'
       });
       return;
     }
-
-    const quotedProduct: QuotedProduct = {
+    const qp: QuotedProduct = {
       ...product,
       quoteId: `quote-item-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       originalId: product.id,
       quantity: 1,
       sellingPrice: product.price
     };
-
-    setQuotedProducts([...quotedProducts, quotedProduct]);
+    setQuotedProducts(prev => [...prev, qp]);
     setSelectedProductId('');
   };
 
   const updateQuotedProduct = (quoteId: string, field: keyof QuotedProduct, value: any) => {
-    setQuotedProducts(products =>
-      products.map(p =>
-        p.quoteId === quoteId ? { ...p, [field]: value } : p
-      )
-    );
+    setQuotedProducts(prev => prev.map(p => (p.quoteId === quoteId ? { ...p, [field]: value } : p)));
   };
 
   const removeQuotedProduct = (quoteId: string) => {
-    setQuotedProducts(products => products.filter(p => p.quoteId !== quoteId));
+    setQuotedProducts(prev => prev.filter(p => p.quoteId !== quoteId));
   };
 
   const resetForm = useCallback(() => {
@@ -316,24 +331,52 @@ export default function Quotations() {
     setDesignCost(0);
     setSampleCost(0);
     setHandlingCost(0);
-    setTermsAccepted(false);
+    setPromo(undefined);
     setEditingQuotationId(null);
     setEditingInvoiceId(null);
   }, []);
 
-  // --- Quotation Management Functions ---
-  const saveQuotation = () => {
+  // --- Quotation save/load/status/delete
+  const saveQuotation = async () => {
     if (!customerName || quotedProducts.length === 0) {
       toast({
-        title: "Validation Error",
-        description: "Customer name and at least one product are required to save a quotation.",
-        variant: "destructive",
+        title: 'Validation Error',
+        description: 'Customer name and at least one product are required.',
+        variant: 'destructive'
       });
       return;
     }
 
-    const newQuotation: QuotationRecord = {
+    const existing = editingQuotationId ? quotationsList.find(q => q.id === editingQuotationId) : null;
+
+    // Try to get a human display name via sequences API (and keep existing if present)
+    let displayName: string | undefined = existing?.displayName;
+    try {
+      if (!displayName) {
+        const resp = await fetch('/api/sequences/next', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ type: 'quotation' })
+        });
+        if (resp.ok) {
+          const { next } = await resp.json();
+          displayName = buildHumanDocName('Quotation', next); // "Quotation X"
+        } else if (nextQuotationNumber) {
+          // fallback to peeked number if POST failed
+          displayName = buildHumanDocName('Quotation', nextQuotationNumber);
+        }
+      }
+    } catch {
+      if (!displayName && nextQuotationNumber) {
+        displayName = buildHumanDocName('Quotation', nextQuotationNumber);
+      }
+    }
+
+    const t = totals();
+
+    const record: QuotationRecord = {
       id: editingQuotationId || `quote-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      displayName,
       customerName,
       customerEmail,
       customerPhone,
@@ -343,18 +386,23 @@ export default function Quotations() {
       designCost,
       sampleCost,
       handlingCost,
-      grandTotal: calculateGrandTotal(),
-      status: editingQuotationId ? (quotationsList.find(q => q.id === editingQuotationId)?.status || 'draft') : 'draft',
-      createdAt: editingQuotationId ? quotationsList.find(q => q.id === editingQuotationId)?.createdAt || new Date().toISOString() : new Date().toISOString(),
+      grandTotal: t.grandTotal,
+      status: editingQuotationId
+        ? (quotationsList.find(q => q.id === editingQuotationId)?.status || 'draft')
+        : 'draft',
+      createdAt: editingQuotationId
+        ? (quotationsList.find(q => q.id === editingQuotationId)?.createdAt || new Date().toISOString())
+        : new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      promo, // <-- persist discount with the quote
     };
 
     if (editingQuotationId) {
-      setQuotationsList(prev => prev.map(q => q.id === editingQuotationId ? newQuotation : q));
-      toast({ title: "Quotation Updated", description: `Quotation for ${customerName} has been updated.` });
+      setQuotationsList(prev => prev.map(q => (q.id === editingQuotationId ? record : q)));
+      toast({ title: 'Quotation Updated', description: `Updated quotation for ${customerName}.` });
     } else {
-      setQuotationsList(prev => [...prev, newQuotation]);
-      toast({ title: "Quotation Saved", description: `Quotation for ${customerName} has been saved.` });
+      setQuotationsList(prev => [...prev, record]);
+      toast({ title: 'Quotation Saved', description: `Saved quotation for ${customerName}.` });
     }
 
     resetForm();
@@ -362,38 +410,35 @@ export default function Quotations() {
   };
 
   const loadQuotationForEdit = (id: string) => {
-    const quoteToEdit = quotationsList.find(q => q.id === id);
-    if (quoteToEdit) {
-      setCustomerName(quoteToEdit.customerName);
-      setCustomerEmail(quoteToEdit.customerEmail);
-      setCustomerPhone(quoteToEdit.customerPhone);
-      setQuoteDate(quoteToEdit.quoteDate);
-      setValidUntil(quoteToEdit.validUntil);
-      setQuotedProducts(quoteToEdit.quotedProducts);
-      setDesignCost(quoteToEdit.designCost);
-      setSampleCost(quoteToEdit.sampleCost);
-      setHandlingCost(quoteToEdit.handlingCost);
-      setEditingQuotationId(id);
-      setCurrentView('edit-quote');
-    } else {
-      toast({ title: "Error", description: "Quotation not found.", variant: "destructive" });
+    const q = quotationsList.find(x => x.id === id);
+    if (!q) {
+      toast({ title: 'Error', description: 'Quotation not found.', variant: 'destructive' });
+      return;
     }
+    setCustomerName(q.customerName);
+    setCustomerEmail(q.customerEmail);
+    setCustomerPhone(q.customerPhone);
+    setQuoteDate(q.quoteDate);
+    setValidUntil(q.validUntil);
+    setQuotedProducts(q.quotedProducts);
+    setDesignCost(q.designCost);
+    setSampleCost(q.sampleCost);
+    setHandlingCost(q.handlingCost);
+    setPromo(q.promo); // <-- restore discount
+    setEditingQuotationId(q.id);
+    setCurrentView('edit-quote');
   };
 
-  const updateQuotationStatus = (id: string, newStatus: QuotationRecord['status']) => {
-    setQuotationsList(prev =>
-      prev.map(quote =>
-        quote.id === id ? { ...quote, status: newStatus, updatedAt: new Date().toISOString() } : quote
-      )
-    );
-    toast({ title: "Quotation Status Updated", description: `Status for quotation ${id} changed to ${newStatus}.` });
+  const updateQuotationStatus = (id: string, newStatus: QuoteStatus) => {
+    setQuotationsList(prev => prev.map(q => (q.id === id ? { ...q, status: newStatus, updatedAt: new Date().toISOString() } : q)));
+    toast({ title: 'Status Updated', description: `Quotation ${id} → ${newStatus}` });
   };
 
   const deleteQuotation = (id: string) => {
     toast({
-      title: "Confirm Deletion",
-      description: "Are you sure you want to delete this quotation? This will also delete any related invoices.",
-      variant: "destructive",
+      title: 'Confirm Deletion',
+      description: 'This will also delete related invoices.',
+      variant: 'destructive',
       action: (
         <Button
           variant="secondary"
@@ -401,7 +446,7 @@ export default function Quotations() {
             setIsDeletingQuotation(true);
             setQuotationsList(prev => prev.filter(q => q.id !== id));
             setInvoicesList(prev => prev.filter(inv => inv.relatedQuotationId !== id));
-            toast({ title: "Quotation Deleted", description: "The quotation and its related invoices have been removed." });
+            toast({ title: 'Quotation Deleted', description: 'Removed quotation and related invoices.' });
             setIsDeletingQuotation(false);
           }}
           disabled={isDeletingQuotation}
@@ -409,70 +454,96 @@ export default function Quotations() {
           {isDeletingQuotation ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
           Delete
         </Button>
-      ),
+      )
     });
   };
 
   const convertToInvoice = (quoteId: string) => {
     const quote = quotationsList.find(q => q.id === quoteId);
-    if (quote) {
-      const newInvoice: InvoiceRecord = {
-        ...quote,
-        id: `invoice-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-        invoiceNumber: `INV-${Math.floor(10000 + Math.random() * 90000)}`,
-        issueDate: new Date().toISOString().split('T')[0],
-        dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        paymentStatus: 'pending',
-        relatedQuotationId: quoteId,
-        status: 'draft'
-      };
-
-      setInvoicesList(prev => [...prev, newInvoice]);
-      setQuotationsList(prev => prev.map(q => q.id === quoteId ? { ...q, status: 'converted_to_invoice' } : q));
-      toast({ title: "Quotation Converted", description: `Quotation for ${quote.customerName} converted to Invoice ${newInvoice.invoiceNumber}.` });
-      setCurrentView('list-invoices');
-    }
+    if (!quote) return;
+    const newInvoice: InvoiceRecord = {
+      ...quote,
+      id: `invoice-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      invoiceNumber: `INV-${Math.floor(10000 + Math.random() * 90000)}`, // will later become "Invoice X" via sequence if desired
+      issueDate: new Date().toISOString().split('T')[0],
+      dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      paymentStatus: 'pending',
+      relatedQuotationId: quoteId,
+      status: 'draft',
+      promo: quote.promo, // <-- carry promo forward
+    };
+    setInvoicesList(prev => [...prev, newInvoice]);
+    setQuotationsList(prev => prev.map(q => (q.id === quoteId ? { ...q, status: 'converted_to_invoice' as QuoteStatus } : q)));
+    toast({ title: 'Converted', description: `Quotation → Invoice ${newInvoice.invoiceNumber}` });
+    setCurrentView('list-invoices');
   };
 
-  // --- Invoice Management Functions ---
-  const saveInvoice = () => {
+  // --- Invoice save/load/status/delete
+  const saveInvoice = async () => {
     if (!customerName || quotedProducts.length === 0) {
       toast({
-        title: "Validation Error",
-        description: "Customer name and at least one product are required to save an invoice.",
-        variant: "destructive",
+        title: 'Validation Error',
+        description: 'Customer name and at least one product are required.',
+        variant: 'destructive'
       });
       return;
     }
 
-    const currentInvoiceData: InvoiceRecord = {
+    const existing = editingInvoiceId ? invoicesList.find(i => i.id === editingInvoiceId) : null;
+
+    // Try to get a human invoice name via sequences API (optional)
+    let humanInvoiceLabel: string | undefined = existing?.invoiceNumber;
+    try {
+      if (!humanInvoiceLabel) {
+        const resp = await fetch('/api/sequences/next', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ type: 'invoice' })
+        });
+        if (resp.ok) {
+          const { next } = await resp.json();
+          humanInvoiceLabel = buildHumanDocName('Invoice', next); // "Invoice X"
+        } else if (nextInvoiceNumber) {
+          humanInvoiceLabel = buildHumanDocName('Invoice', nextInvoiceNumber);
+        }
+      }
+    } catch {
+      if (!humanInvoiceLabel && nextInvoiceNumber) {
+        humanInvoiceLabel = buildHumanDocName('Invoice', nextInvoiceNumber);
+      }
+    }
+
+    const t = totals();
+
+    const record: InvoiceRecord = {
       id: editingInvoiceId || `invoice-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      invoiceNumber: editingInvoiceId ? invoicesList.find(inv => inv.id === editingInvoiceId)?.invoiceNumber || `INV-${Math.floor(10000 + Math.random() * 90000)}` : `INV-${Math.floor(10000 + Math.random() * 90000)}`,
+      invoiceNumber: humanInvoiceLabel || `INV-${Math.floor(10000 + Math.random() * 90000)}`,
       customerName,
       customerEmail,
       customerPhone,
-      quoteDate: '',
-      validUntil: '',
-      issueDate: new Date().toISOString().split('T')[0],
-      dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      issueDate: existing?.issueDate || new Date().toISOString().split('T')[0],
+      dueDate: existing?.dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      quoteDate: existing?.quoteDate || '',
+      validUntil: existing?.validUntil || '',
       quotedProducts,
       designCost,
       sampleCost,
       handlingCost,
-      grandTotal: calculateGrandTotal(),
-      status: editingInvoiceId ? (invoicesList.find(inv => inv.id === editingInvoiceId)?.status || 'draft') : 'draft',
-      paymentStatus: editingInvoiceId ? (invoicesList.find(inv => inv.id === editingInvoiceId)?.paymentStatus || 'pending') : 'pending',
-      relatedQuotationId: null,
-      createdAt: editingInvoiceId ? invoicesList.find(inv => inv.id === editingInvoiceId)?.createdAt || new Date().toISOString() : new Date().toISOString(),
+      grandTotal: t.grandTotal,
+      status: existing?.status || 'draft',
+      paymentStatus: existing?.paymentStatus || 'pending',
+      relatedQuotationId: existing?.relatedQuotationId || null,
+      createdAt: existing?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      promo, // <-- persist discount with the invoice
     };
 
     if (editingInvoiceId) {
-      setInvoicesList(prev => prev.map(inv => inv.id === editingInvoiceId ? currentInvoiceData : inv));
-      toast({ title: "Invoice Updated", description: `Invoice ${currentInvoiceData.invoiceNumber} has been updated.` });
+      setInvoicesList(prev => prev.map(i => (i.id === editingInvoiceId ? record : i)));
+      toast({ title: 'Invoice Updated', description: `Updated ${record.invoiceNumber}.` });
     } else {
-      setInvoicesList(prev => [...prev, currentInvoiceData]);
-      toast({ title: "Invoice Saved", description: `Invoice ${currentInvoiceData.invoiceNumber} has been saved.` });
+      setInvoicesList(prev => [...prev, record]);
+      toast({ title: 'Invoice Saved', description: `Saved ${record.invoiceNumber}.` });
     }
 
     resetForm();
@@ -480,45 +551,42 @@ export default function Quotations() {
   };
 
   const loadInvoiceForEdit = (id: string) => {
-    const invoiceToEdit = invoicesList.find(inv => inv.id === id);
-    if (invoiceToEdit) {
-      setCustomerName(invoiceToEdit.customerName);
-      setCustomerEmail(invoiceToEdit.customerEmail);
-      setCustomerPhone(invoiceToEdit.customerPhone);
-      setQuoteDate(invoiceToEdit.quoteDate);
-      setValidUntil(invoiceToEdit.validUntil);
-      setQuotedProducts(invoiceToEdit.quotedProducts);
-      setDesignCost(invoiceToEdit.designCost);
-      setSampleCost(invoiceToEdit.sampleCost);
-      setHandlingCost(invoiceToEdit.handlingCost);
-      setEditingInvoiceId(id);
-      setCurrentView('edit-invoice');
-    } else {
-      toast({ title: "Error", description: "Invoice not found.", variant: "destructive" });
+    const inv = invoicesList.find(i => i.id === id);
+    if (!inv) {
+      toast({ title: 'Error', description: 'Invoice not found.', variant: 'destructive' });
+      return;
     }
+    setCustomerName(inv.customerName);
+    setCustomerEmail(inv.customerEmail);
+    setCustomerPhone(inv.customerPhone);
+    setQuoteDate(inv.quoteDate || '');
+    setValidUntil(inv.validUntil || '');
+    setQuotedProducts(inv.quotedProducts);
+    setDesignCost(inv.designCost);
+    setSampleCost(inv.sampleCost);
+    setHandlingCost(inv.handlingCost);
+    setPromo(inv.promo); // <-- restore discount
+    setEditingInvoiceId(inv.id);
+    setCurrentView('edit-invoice');
   };
 
-  const updateInvoicePaymentStatus = (id: string, newStatus: InvoiceRecord['paymentStatus']) => {
-    setInvoicesList(prev =>
-      prev.map(invoice =>
-        invoice.id === id ? { ...invoice, paymentStatus: newStatus, updatedAt: new Date().toISOString() } : invoice
-      )
-    );
-    toast({ title: "Invoice Status Updated", description: `Payment status for invoice ${id} changed to ${newStatus}.` });
+  const updateInvoicePaymentStatus = (id: string, newStatus: PaymentStatus) => {
+    setInvoicesList(prev => prev.map(inv => (inv.id === id ? { ...inv, paymentStatus: newStatus, updatedAt: new Date().toISOString() } : inv)));
+    toast({ title: 'Payment Status Updated', description: `Invoice ${id} → ${newStatus}` });
   };
 
   const deleteInvoice = (id: string) => {
     toast({
-      title: "Confirm Deletion",
-      description: "Are you sure you want to delete this invoice?",
-      variant: "destructive",
+      title: 'Confirm Deletion',
+      description: 'Delete this invoice?',
+      variant: 'destructive',
       action: (
         <Button
           variant="secondary"
           onClick={() => {
             setIsDeletingInvoice(true);
-            setInvoicesList(prev => prev.filter(inv => inv.id !== id));
-            toast({ title: "Invoice Deleted", description: "The invoice has been removed." });
+            setInvoicesList(prev => prev.filter(i => i.id !== id));
+            toast({ title: 'Invoice Deleted', description: 'Removed invoice.' });
             setIsDeletingInvoice(false);
           }}
           disabled={isDeletingInvoice}
@@ -526,865 +594,666 @@ export default function Quotations() {
           {isDeletingInvoice ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
           Delete
         </Button>
-      ),
+      )
     });
   };
 
-  // --- Document Generation & Download/Send ---
-  const generateHtmlContent = (data: QuotationRecord | InvoiceRecord, type: 'quotation' | 'invoice') => {
-    const isInvoice = type === 'invoice';
-    const title = isInvoice ? 'INVOICE' : 'QUOTE';
-    const docNumberLabel = isInvoice ? 'Invoice Number:' : 'Estimate Number:';
-    const docNumber = isInvoice ? data.invoiceNumber : data.id;
-    const issueDateLabel = isInvoice ? 'Invoice Date:' : 'Estimate Date:';
-    const issueDate = isInvoice ? data.issueDate : data.quoteDate;
-    const dueDateLabel = isInvoice ? 'Payment Due:' : 'Valid Until:';
-    const dueDate = isInvoice ? data.dueDate : data.validUntil;
-    const subtotalLabel = isInvoice ? 'Subtotal:' : 'Subtotal:';
-    const vatLabel = isInvoice ? 'VAT 15%:' : 'VAT 15%:';
-    const totalLabel = isInvoice ? 'Total:' : 'Grand Total(ZAR):';
-    const amountDueLabel = isInvoice ? 'Amount Due(ZAR):' : '';
-    const amountDueValue = isInvoice ? `R${data.grandTotal.toFixed(2)}` : '';
-
-    // Calculate VAT and Subtotal based on grand total
-    const { vatAmount, subtotalAmount } = calculateVatAndSubtotal();
-
-    // --- Use Company Details from State ---
-    const companyAddress = `${companyDetails.addressLine1}${companyDetails.addressLine2 ? `<br>${companyDetails.addressLine2}` : ''}<br>${companyDetails.city}, ${companyDetails.province} ${companyDetails.postalCode}<br>${companyDetails.country}`;
-    const companyContact = `Mobile: ${companyDetails.phone}<br>${companyDetails.website}`;
-    const companyRegistration = `Registration No: ${companyDetails.registrationNumber} VAT No: ${companyDetails.vatNumber}`;
-
-    // --- Use Banking Details from State ---
-    const bankingDetailsText = `Banking Details: ${bankingDetails.bankName} Account No: ${bankingDetails.bankAccountNumber} Branch Code: ${bankingDetails.bankBranchCode}<br>PLEASE USE YOUR COMPANY NAME AS A REFERENCE (AS IT APPEARS ON THIS DOCUMENT). ANY OTHER REFERENCE WILL CAUSE A DELAY IN PROCESSING YOUR PAYMENT WHICH WILL DELAY COMPLETION OF YOUR ORDER.`;
-
-    // --- Terms & Conditions (Standard text from PDFs) ---
-    const termsAndConditions = `
-      <p><strong>Terms & Conditions:</strong> Please note that a 80% deposit is payable on order approval. Balance due on collection. We require full payment for any invoice of R2,000.00 and below. All goods remain the property of ${companyDetails.name} until paid in full.</p>
-      <p><strong>ARTWORK:</strong> Please note it is company policy that all artwork is signed off by the customer before production can commence. Confirmations must be in writing regardless of the simplicity of the sign. Once signed off artwork is received by ${companyDetails.name}, any errors or omissions are the responsibility of the customer and any corrections will be charged to the customer at the appropriate rate. Any delays in supplying suitable artwork will delay the proofing and production process.</p>
-      <p><strong>ARTWORK NOT SUPPLIED AND DESIGN IS REQUIRED.</strong> Where graphic design services to prepare artwork for your signage are required, all elements to be included in the artwork must be supplied in the correct formats. Once all the relevant information has been received, a proof for your approval will be provided within 3 working days.</p>
-      <p><strong>FULL COLOUR IMAGES.</strong> Minimum resolution required - 300dpi. Pictures sourced from the internet cannot be used. Quality of an image cannot be improved.</p>
-      <p><strong>TEXT CONTENT</strong> Can be supplied by e-mail or if a menu or heavy content sign is needed, please supply in a Word document. If a particular font is required, please supply the name of the font. If the required font is not available on our system, it can be sourced from internet based font business.</p>
-      <p><strong>ARTWORK - SUPPLIED READY BY US.</strong> If applicable, please arrange for your artwork to be e-mailed or supplied in a suitable format. Preferred formats - outlined EPS, PDF and Vector. If files are very large, we can download from FTP sites or similar. Before supplying artwork, please check with our designers to confirm all dimensions are correct; as a certain setup may require e.g bleed. To prevent delays in providing proofs, please ensure the following are provided: LOGO - Required in an outlined EPS format or PDF containing outlined graphics. JPEGS or similar flat images are rarely useable or suitable for full colour printing unless supplied in a resolution for the sign size in question. An EPS format can be sourced from the original designer or from your printer. Supply us with the relevant contact details to source it on your behalf.</p>
-      <p><strong>PAYMENT TERMS</strong> Due to the custom nature of the signage, production cannot commence until receipt of 80% deposit(non-refundable). Balance required upon collection or completion of installation. Please email proof of payment to the sales consultant assisting you. Once payment is reflected on our account, a payment receipt will be emailed to you. If required, the original invoice can also be emailed to you. As per company policy, all orders under R2,000.00 excl VAT to be paid in full, prior to commencement of production, due to the custom nature of your signage. Please use your company name or quote/ order numbers reference.(As it appears on this document).</p>
-      <p><strong>IMPORTANT NOTICE:</strong> All signage remains the property of ${companyDetails.name} until paid if full. Late payments are subject to a 24% interest charge per annum.</p>
-      <p><strong>COMPLETION</strong> *Normal completion time is 7- 10 working days(weekends excluded) from the date artwork and deposit is approved/received. *Due to the volume, size and complexity of a specific order, the completion times may change accordingly and you will be notified by your sales consultant of the new expected delivery, installation or collection dates. This order is subject to availability of stock and materials from supplier. If out of stock, completion dates will be communicated to the client. Or alternative materials may be supplemented to assist in the timeous completion. Due to the nature of signage and weather conditions, lifespans cannot be guaranteed; however advice and indications of longevity will be discussed and indicated to the client. Any complaints about signage and/ or installation MUST be put in writing to; info@tshepisobranding.co.za- within 5 working days from the date of completion. Failing to do so, will constitute complete satisfaction.</p>
-      <p><strong>FORCE MAJEURE:</strong> * ${companyDetails.name} shall not be held responsible in delivery or non-delivery of the products or services due to Force Majeure. *${companyDetails.name} is not responsible for the late or non-delivery in the event of Force Majeure of any contingencies beyond ${companyDetails.name}'s control. *Either party shall not be held responsible for failure or delay to perform all or any part of this agreement due to natural disasters, war or any other events of Force Majeure.</p>
-      <p>${isInvoice ? '' : 'This estimate is valid for a period of 15 working days, weekends included.'}</p>
-      <p>${companyDetails.name} "FOR PROGRESSIVE BRANDS."</p>
-    `;
-
-    return `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>${title} - ${data.customerName}</title>
-        <style>
-          @page {
-            margin: 0;
-            size: A4;
-          }
-          body { font-family: Arial, sans-serif; margin: 0; padding: 0; color: #000; font-size: 12px; }
-          .page { padding: 20px; position: relative; min-height: 100vh; box-sizing: border-box; }
-          .page-number { position: absolute; bottom: 10px; right: 10px; font-size: 10px; }
-          .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
-          .company-info { text-align: left; }
-          .company-name { color: #E68A2E; font-size: 16px; font-weight: bold; margin-bottom: 5px; }
-          .company-address, .company-contact, .company-registration { font-size: 10px; line-height: 1.2; }
-          .document-info-box { border: 1px solid #000; padding: 10px; width: 40%; }
-          .document-title { text-align: center; font-size: 16px; font-weight: bold; margin-bottom: 10px; color: #000000; }
-          .info-table { width: 100%; border-collapse: collapse; font-size: 10px; }
-          .info-table td { padding: 2px 5px; }
-          .bill-to { margin-bottom: 20px; font-size: 10px; }
-          .bill-to-title { font-weight: bold; margin-bottom: 5px; }
-          .bill-to-details { line-height: 1.2; }
-          .product-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 10px; }
-          .product-table th, .product-table td { border: 1px solid #000; padding: 5px; text-align: left; }
-          .product-table th { background-color: #E68A2E; color: white; font-weight: bold; text-align: center; }
-          .product-table .product-name { width: 40%; }
-          .product-table .product-description { font-size: 9px; color: #555; }
-          .totals-table { width: 50%; border-collapse: collapse; margin-left: auto; font-size: 10px; }
-          .totals-table td { padding: 3px 5px; }
-          .border-top { border-top: 1px solid #000; }
-          .text-right { text-align: right; }
-          .text-center { text-align: center; }
-          .font-bold { font-weight: bold; }
-          .notes-terms { margin-top: 20px; font-size: 9px; line-height: 1.3; }
-          .footer { margin-top: 40px; font-size: 9px; text-align: center; }
-          .footer p { margin: 2px 0; }
-          .page-break { page-break-before: always; }
-          .logo { max-height: 50px; max-width: 150px; margin-bottom: 10px; } /* Adjust size as needed */
-        </style>
-      </head>
-      <body>
-        <div class="page">
-          <div class="header">
-            <div class="company-info">
-              <img src="./pages/logo.png" alt="${companyDetails.name} Logo" class="logo" onerror="this.style.display='none';"> <!-- Logo -->
-              <div class="company-name">${companyDetails.name}</div>
-              <div class="company-address">${companyAddress}</div>
-              <div class="company-contact">${companyContact}</div>
-              ${isInvoice ? `<div class="company-registration">${companyRegistration}</div>` : ''}
-            </div>
-            <div class="document-info-box">
-              <div class="document-title">${title}</div>
-              <table class="info-table">
-                <tr><td><strong>BILL TO</strong></td><td></td></tr>
-                <tr><td colspan="2">${data.customerName}</td></tr>
-                <tr><td colspan="2">${data.customerEmail || ''}</td></tr>
-                <tr><td colspan="2">${data.customerPhone || ''}</td></tr>
-                <tr><td>${docNumberLabel}</td><td>${docNumber}</td></tr>
-                <tr><td>${issueDateLabel}</td><td>${issueDate}</td></tr>
-                <tr><td>${dueDateLabel}</td><td>${dueDate}</td></tr>
-                ${isInvoice && amountDueValue ? `<tr><td><strong>${amountDueLabel}</strong></td><td><strong>${amountDueValue}</strong></td></tr>` : ''}
-              </table>
-            </div>
-          </div>
-
-          <table class="product-table">
-            <thead>
-              <tr>
-                <th class="product-name">Products</th>
-                <th>Quantity</th>
-                <th>Price</th>
-                <th>Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${data.quotedProducts.map(product => `
-                <tr>
-                  <td>
-                    ${product.name}
-                    ${product.notes ? `<br><span class="product-description">${product.notes}</span>` : ''}
-                  </td>
-                  <td class="text-center">${product.quantity}</td>
-                  <td class="text-right">R${product.sellingPrice.toFixed(2)}</td>
-                  <td class="text-right">R${(product.sellingPrice * product.quantity).toFixed(2)}</td>
-                </tr>
-              `).join('')}
-
-              <!-- Totals Section -->
-              <tr>
-                <td colspan="3" class="text-right"><strong>${subtotalLabel}</strong></td>
-                <td class="text-right">R${subtotalAmount.toFixed(2)}</td>
-              </tr>
-              <tr>
-                <td colspan="3" class="text-right"><strong>${vatLabel}</strong></td>
-                <td class="text-right">R${vatAmount.toFixed(2)}</td>
-              </tr>
-              <tr>
-                 <td colspan="3" class="text-right font-bold">${totalLabel}</td>
-                 <td class="text-right font-bold">R${data.grandTotal.toFixed(2)}</td>
-              </tr>
-              <!-- Add rows for additional costs if they exist -->
-              ${data.designCost > 0 ? `<tr><td colspan="3" class="text-right">Design Cost:</td><td class="text-right">R${data.designCost.toFixed(2)}</td></tr>` : ''}
-              ${data.sampleCost > 0 ? `<tr><td colspan="3" class="text-right">Sample Cost:</td><td class="text-right">R${data.sampleCost.toFixed(2)}</td></tr>` : ''}
-              ${data.handlingCost > 0 ? `<tr><td colspan="3" class="text-right">Handling Cost:</td><td class="text-right">R${data.handlingCost.toFixed(2)}</td></tr>` : ''}
-            </tbody>
-          </table>
-
-          <div class="notes-terms">
-            <p><strong>Notes/ Terms</strong></p>
-            <p>${bankingDetailsText}</p>
-            ${termsAndConditions}
-          </div>
-
-          <div class="footer">
-             <p>Thank you for your business!!!</p>
-             <div class="page-number">Page 1</div>
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
-  };
-
-  // --- PDF Generation ---
+  // --- Build HTML + download/send
   const downloadPdf = (data: QuotationRecord | InvoiceRecord, type: 'quotation' | 'invoice') => {
-    const element = document.createElement('div');
-    element.innerHTML = generateHtmlContent(data, type);
-    // Ensure the logo path is relative for PDF generation
-
-
-    const opt = {
-      margin:       10,
-      filename:     `${type}-${data.customerName.replace(/\s+/g, '-')}-${type === 'quotation' ? data.quoteDate : data.issueDate}.pdf`,
-      image:        { type: 'jpeg', quality: 0.98 },
-      html2canvas:  { scale: 2, useCORS: true },
-      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
-    };
-
-    html2pdf().set(opt).from(element).save().then(() => {
-        toast({ title: `${type === 'quotation' ? 'Quotation' : 'Invoice'} Downloaded`, description: `${type === 'quotation' ? 'Quotation' : 'Invoice'} for ${data.customerName} downloaded as PDF.` });
-    }).catch(err => {
-        console.error('PDF generation error:', err);
-        toast({
-            title: `Failed to Download ${type === 'quotation' ? 'Quotation' : 'Invoice'}`,
-            description: "An error occurred while generating the PDF.",
-            variant: "destructive",
-        });
+    const html = buildDocumentHtml({
+      data,
+      type,
+      company: companyDetails,
+      bankAccounts,
+      selectedBankAccountIds, // MULTI
+      termsHtml: nl2brHtml(termsInput), // friendly authoring -> HTML
+      logoUrl,
+      // prefer promo saved on the record; otherwise fall back to current UI state
+      promo: (data as any).promo ?? promo,
     });
+    const filename = `${type}-${data.customerName.replace(/\s+/g, '-')}-${type === 'quotation'
+      ? (data as QuotationRecord).quoteDate
+      : (data as InvoiceRecord).issueDate}.pdf`;
+
+    downloadPdfFromHtml(html, filename)
+      .then(() => toast({
+        title: `${type === 'quotation' ? 'Quotation' : 'Invoice'} Downloaded`,
+        description: `Saved PDF for ${data.customerName}.`
+      }))
+      .catch(err => {
+        console.error('PDF error:', err);
+        toast({
+          title: `Failed to Download ${type === 'quotation' ? 'Quotation' : 'Invoice'}`,
+          description: 'An error occurred while generating the PDF.',
+          variant: 'destructive'
+        });
+      });
   };
 
   const sendDocument = async (data: QuotationRecord | InvoiceRecord, type: 'quotation' | 'invoice') => {
     setIsSendingDocument(true);
-    // For sending, we might want to generate a PDF blob and send it via email API
-    // This example still sends HTML, but you could modify it to send the PDF blob
-    const htmlContent = generateHtmlContent(data, type);
-    const subject = `${type === 'quotation' ? 'Quotation' : 'Invoice'} from Tshepiso Branding Solutions`;
+    const htmlBody = buildDocumentHtml({
+      data,
+      type,
+      company: companyDetails,
+      bankAccounts,
+      selectedBankAccountIds, // MULTI
+      termsHtml: nl2brHtml(termsInput),
+      logoUrl,
+      promo: (data as any).promo ?? promo, // same fallback behavior
+    });
+    const subject = `${type === 'quotation' ? 'Quotation' : 'Invoice'} from ${companyDetails.name}`;
 
     try {
-      const response = await fetch('/api/send-document-email', {
+      const res = await fetch('/api/send-document-email', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           recipientEmail: data.customerEmail,
-          subject: subject,
-          htmlBody: htmlContent,
+          subject,
+          htmlBody,
           documentType: type,
-          customerName: data.customerName,
-        }),
+          customerName: data.customerName
+        })
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `Failed to send ${type}.`);
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        throw new Error(e.message || 'Failed to send document.');
       }
 
-      const result = await response.json();
       toast({
         title: `${type === 'quotation' ? 'Quotation' : 'Invoice'} Sent`,
-        description: result.message,
+        description: `Emailed ${type} to ${data.customerEmail || 'customer'}.`
       });
 
       if (type === 'quotation') {
-        setQuotationsList(prev => prev.map(q => q.id === data.id ? { ...q, status: 'sent', updatedAt: new Date().toISOString() } : q));
+        setQuotationsList(prev => prev.map(q => (q.id === data.id ? { ...q, status: 'sent', updatedAt: new Date().toISOString() } : q)));
       } else {
-        setInvoicesList(prev => prev.map(inv => inv.id === data.id ? { ...inv, status: 'sent', updatedAt: new Date().toISOString() } : inv));
+        setInvoicesList(prev => prev.map(i => (i.id === data.id ? { ...i, status: 'sent', updatedAt: new Date().toISOString() } : i)));
       }
     } catch (error) {
-      console.error(`Error sending ${type}:`, error);
+      console.error('Send error:', error);
       toast({
         title: `Failed to Send ${type === 'quotation' ? 'Quotation' : 'Invoice'}`,
-        description: error instanceof Error ? error.message : "An unknown error occurred while sending the document. Please check console.",
-        variant: "destructive",
+        description: error instanceof Error ? error.message : 'Unknown error.',
+        variant: 'destructive'
       });
     } finally {
       setIsSendingDocument(false);
     }
   };
 
-  // Helper to get current form data as a QuotationRecord
-  const getCurrentFormDataAsQuotation = (): QuotationRecord => ({
-    id: editingQuotationId || `temp-quote-${Date.now()}`,
-    customerName,
-    customerEmail,
-    customerPhone,
-    quoteDate,
-    validUntil,
-    quotedProducts,
-    designCost,
-    sampleCost,
-    handlingCost,
-    grandTotal: calculateGrandTotal(),
-    status: 'draft',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  });
-
-  const getCurrentFormDataAsInvoice = (): InvoiceRecord => {
-    const existingInvoice = editingInvoiceId ? invoicesList.find(inv => inv.id === editingInvoiceId) : null;
+  // --- Helpers to build temporary records from the current form
+  const getCurrentFormDataAsQuotation = (): QuotationRecord => {
+    const t = totals();
     return {
-      id: editingInvoiceId || `temp-invoice-${Date.now()}`,
-      invoiceNumber: existingInvoice?.invoiceNumber || `INV-${Math.floor(10000 + Math.random() * 90000)}`,
+      id: editingQuotationId || `temp-quote-${Date.now()}`,
+      displayName: nextQuotationNumber ? buildHumanDocName('Quotation', nextQuotationNumber) : undefined,
       customerName,
       customerEmail,
       customerPhone,
-      issueDate: existingInvoice?.issueDate || new Date().toISOString().split('T')[0],
-      dueDate: existingInvoice?.dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      quoteDate: existingInvoice?.quoteDate || '',
-      validUntil: existingInvoice?.validUntil || '',
+      quoteDate,
+      validUntil,
       quotedProducts,
       designCost,
       sampleCost,
       handlingCost,
-      grandTotal: calculateGrandTotal(),
-      status: existingInvoice?.status || 'draft',
-      paymentStatus: existingInvoice?.paymentStatus || 'pending',
-      relatedQuotationId: existingInvoice?.relatedQuotationId || null,
-      createdAt: existingInvoice?.createdAt || new Date().toISOString(),
+      grandTotal: t.grandTotal,
+      status: 'draft',
+      createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      promo, // include in the temp record so PDF sees it even without explicit arg
     };
   };
 
-  // --- Banking Details Form ---
-  const renderBankingDetailsForm = () => (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Settings className="h-5 w-5" />
-          Company Banking Details
-        </CardTitle>
-        <p className="text-sm text-gray-500">Edit your company's banking information. Changes are saved automatically.</p>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid md:grid-cols-3 gap-4">
-          <div className="space-y-2">
-            <Label htmlFor="bankName">Bank Name</Label>
-            <Input
-              id="bankName"
-              value={bankingDetails.bankName}
-              onChange={(e) => setBankingDetails(prev => ({ ...prev, bankName: e.target.value }))}
-              placeholder="e.g., ABSA"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="bankAccountNumber">Account Number</Label>
-            <Input
-              id="bankAccountNumber"
-              value={bankingDetails.bankAccountNumber}
-              onChange={(e) => setBankingDetails(prev => ({ ...prev, bankAccountNumber: e.target.value }))}
-              placeholder="e.g., 409 7457 454"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="bankBranchCode">Branch Code</Label>
-            <Input
-              id="bankBranchCode"
-              value={bankingDetails.bankBranchCode}
-              onChange={(e) => setBankingDetails(prev => ({ ...prev, bankBranchCode: e.target.value }))}
-              placeholder="e.g., 632005"
-            />
-          </div>
-        </div>
-        <div className="pt-4">
-          <Button onClick={() => setCurrentView('list-quotes')}>
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Quotations
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+  const getCurrentFormDataAsInvoice = (): InvoiceRecord => {
+    const existing = editingInvoiceId ? invoicesList.find(i => i.id === editingInvoiceId) : null;
+    const t = totals();
+    return {
+      id: editingInvoiceId || `temp-invoice-${Date.now()}`,
+      invoiceNumber: existing?.invoiceNumber || (nextInvoiceNumber ? buildHumanDocName('Invoice', nextInvoiceNumber) : `INV-${Math.floor(10000 + Math.random() * 90000)}`),
+      customerName,
+      customerEmail,
+      customerPhone,
+      issueDate: existing?.issueDate || new Date().toISOString().split('T')[0],
+      dueDate: existing?.dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      quoteDate: existing?.quoteDate || '',
+      validUntil: existing?.validUntil || '',
+      quotedProducts,
+      designCost,
+      sampleCost,
+      handlingCost,
+      grandTotal: t.grandTotal,
+      status: existing?.status || 'draft',
+      paymentStatus: existing?.paymentStatus || 'pending',
+      relatedQuotationId: existing?.relatedQuotationId || null,
+      createdAt: existing?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      promo, // include here too
+    };
+  };
+
+  // ---------- UI FRAGMENTS (stateless child components are okay) ----------
+
+  const PromoEditor = () => (
+    <div className="space-y-2 md:col-span-3">
+      <Label>Promotion / Discount</Label>
+      <div className="grid md:grid-cols-4 gap-2">
+        <Input
+          placeholder="Promo code (optional)"
+          value={promo?.code || ''}
+          onChange={(e) => setPromo(prev => ({ ...(prev || { discountType: 'percent', discountValue: 0 }), code: e.target.value }))}
+        />
+        <Select
+          value={promo?.discountType || 'percent'}
+          onValueChange={(v: DiscountType) =>
+            setPromo(prev => ({ ...(prev || { discountValue: 0 }), discountType: v }))
+          }
+        >
+          <SelectTrigger><SelectValue placeholder="Type" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="percent">Percent %</SelectItem>
+            <SelectItem value="fixed">Fixed (R)</SelectItem>
+          </SelectContent>
+        </Select>
+        <Input
+          type="number"
+          step="0.01"
+          placeholder={promo?.discountType === 'fixed' ? 'Amount (R)' : 'Percent %'}
+          value={promo?.discountValue ?? 0}
+          onChange={(e) => setPromo(prev => ({ ...(prev || { discountType: 'percent' }), discountValue: parseFloat(e.target.value) || 0 }))}
+        />
+        <Button variant="outline" onClick={() => setPromo(undefined)}>Clear</Button>
+      </div>
+    </div>
   );
 
-  // --- Render Logic based on currentView ---
-  const renderQuotationForm = () => (
-    <>
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Mail className="h-5 w-5" />
-            Customer Information
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="customerName">Customer Name</Label>
-              <Input
-                id="customerName"
-                value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
-                placeholder="Enter customer name"
+  const BankPicker = () => (
+    <div className="space-y-2">
+      <Label>Bank accounts to print</Label>
+      <div className="rounded border p-3 grid md:grid-cols-2 gap-2 bg-white">
+        {bankAccounts.length === 0 && (
+          <div className="text-sm text-gray-500">No bank accounts configured yet.</div>
+        )}
+
+        {bankAccounts.map(b => {
+          const checked = selectedBankAccountIds.includes(b.id);
+          return (
+            <label
+              key={b.id}
+              className={`flex items-start gap-3 p-2 rounded border cursor-pointer ${
+                checked ? 'bg-amber-50 border-amber-300' : 'bg-gray-50'
+              }`}
+            >
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={checked}
+                onChange={(e) => {
+                  setSelectedBankAccountIds(prev => {
+                    if (e.target.checked) return Array.from(new Set([...prev, b.id]));
+                    return prev.filter(id => id !== b.id);
+                  });
+                }}
               />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="customerEmail">Email</Label>
-              <Input
-                id="customerEmail"
-                type="email"
-                value={customerEmail}
-                onChange={(e) => setCustomerEmail(e.target.value)}
-                placeholder="customer@example.com"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="customerPhone">Phone</Label>
-              <Input
-                id="customerPhone"
-                value={customerPhone}
-                onChange={(e) => setCustomerPhone(e.target.value)}
-                placeholder="+27 123 456 789"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="validUntil">Valid Until</Label>
-              <Input
-                id="validUntil"
-                type="date"
-                value={validUntil}
-                onChange={(e) => setValidUntil(e.target.value)}
-              />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Plus className="h-5 w-5" />
-            Add Products to Quote
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {availableProducts.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
-              <FileText className="h-12 w-12 mx-auto mb-4 text-gray-400" />
-              <p>No products available. Please select a snapshot from the Pricing Calculator first.</p>
-              <Link href="/pricing-calculator">
-                <Button className="mt-4">Go to Pricing Calculator</Button>
-              </Link>
-            </div>
-          ) : (
-            <div className="flex gap-4">
-              <div className="flex-1">
-                <Select value={selectedProductId} onValueChange={setSelectedProductId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a product to add" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableProducts.map(product => (
-                      <SelectItem key={product.id} value={String(product.id)}>
-                        {product.name} - Suggested Price: R{product.price.toFixed(2)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="text-sm leading-5">
+                <div className="font-medium">
+                  {(b.label || b.bankName)} {b.isActive ? <Badge className="ml-2">active</Badge> : <Badge variant="secondary" className="ml-2">inactive</Badge>}
+                </div>
+                <div className="text-gray-600">
+                  {b.bankName} — {b.bankAccountNumber} (Branch: {b.bankBranchCode || '-'})
+                </div>
               </div>
-              <Button onClick={handleAddProduct} disabled={!selectedProductId}>
-                <Plus className="h-4 w-4 mr-2" />
-                Add Product
-              </Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      {quotedProducts.length > 0 && (
+            </label>
+          );
+        })}
+      </div>
+      <p className="text-xs text-gray-500">Tip: select more than one to show multiple banking options on the document.</p>
+    </div>
+  );
+
+  // ---------- FORMS ----------
+
+  const renderQuotationForm = () => {
+    const t = totals();
+    return (
+      <>
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5" />
-              Quoted Products
+              <Mail className="h-5 w-5" />
+              Customer Information
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {quotedProducts.map(product => (
-                <div key={product.quoteId} className="border rounded-lg p-4 bg-gray-50">
-                  <div className="flex justify-between items-start mb-3">
-                    <h4 className="font-semibold">{product.name}</h4>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => removeQuotedProduct(product.quoteId)}
-                      className="text-red-500 hover:text-red-700"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                  <div className="grid md:grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                      <Label>Quantity</Label>
-                      <Input
-                        type="number"
-                        min="1"
-                        value={product.quantity}
-                        onChange={(e) => updateQuotedProduct(product.quoteId, 'quantity', parseInt(e.target.value) || 1)}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Unit Price</Label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={product.sellingPrice}
-                        onChange={(e) => updateQuotedProduct(product.quoteId, 'sellingPrice', parseFloat(e.target.value) || 0)}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Line Total</Label>
-                      <div className="p-2 bg-amber-100 rounded text-amber-800 font-semibold">
-                        R{calculateLineTotal(product).toFixed(2)}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="mt-2">
-                    <Label>Product Notes</Label>
-                    <Input
-                      value={product.notes || ''}
-                      onChange={(e) => updateQuotedProduct(product.quoteId, 'notes', e.target.value)}
-                      placeholder="e.g., Size, Color, Specific requirements"
-                    />
-                  </div>
-                </div>
-              ))}
+          <CardContent className="space-y-4">
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="customerName">Customer Name</Label>
+                <Input id="customerName" value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Enter customer name" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="customerEmail">Email</Label>
+                <Input id="customerEmail" type="email" value={customerEmail} onChange={(e) => setCustomerEmail(e.target.value)} placeholder="customer@example.com" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="customerPhone">Phone</Label>
+                <Input id="customerPhone" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="+27 123 456 789" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="validUntil">Valid Until</Label>
+                <Input id="validUntil" type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)} />
+              </div>
             </div>
           </CardContent>
         </Card>
-      )}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <DollarSign className="h-5 w-5" />
-            Additional Costs
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid md:grid-cols-3 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="designCost">Design Cost</Label>
-              <Input
-                id="designCost"
-                type="number"
-                step="0.01"
-                value={designCost}
-                onChange={(e) => setDesignCost(parseFloat(e.target.value) || 0)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="sampleCost">Sample Cost</Label>
-              <Input
-                id="sampleCost"
-                type="number"
-                step="0.01"
-                value={sampleCost}
-                onChange={(e) => setSampleCost(parseFloat(e.target.value) || 0)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="handlingCost">Handling Cost</Label>
-              <Input
-                id="handlingCost"
-                type="number"
-                step="0.01"
-                value={handlingCost}
-                onChange={(e) => setHandlingCost(parseFloat(e.target.value) || 0)}
-              />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Quote Summary</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-2">
-            <div className="flex justify-between">
-              <span>Subtotal:</span>
-              <span>R{calculateSubtotal().toFixed(2)}</span>
-            </div>
-            {(designCost > 0 || sampleCost > 0 || handlingCost > 0) && (
-              <div className="flex justify-between">
-                <span>Additional Costs:</span>
-                <span>R{(designCost + sampleCost + handlingCost).toFixed(2)}</span>
-              </div>
-            )}
-            <Separator />
-            <div className="flex justify-between text-lg font-bold text-amber-600">
-              <span>Grand Total:</span>
-              <span>R{calculateGrandTotal().toFixed(2)}</span>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardContent className="pt-6">
-          <div className="flex gap-4 flex-wrap">
-            <Button
-              onClick={saveQuotation}
-              disabled={!customerName || quotedProducts.length === 0}
-              className="flex-1 md:flex-initial"
-            >
-              <SquarePen className="h-4 w-4 mr-2" />
-              {editingQuotationId ? 'Update Quotation' : 'Save Quotation'}
-            </Button>
-            <Button
-              onClick={() => downloadPdf(getCurrentFormDataAsQuotation(), 'quotation')}
-              disabled={!customerName || quotedProducts.length === 0}
-              className="flex-1 md:flex-initial"
-              variant="outline"
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Download PDF
-            </Button>
-            <Button variant="outline" onClick={resetForm} className="flex-1 md:flex-initial">
-              Reset Form
-            </Button>
-            <Button variant="outline" onClick={() => setCurrentView('edit-banking')} className="flex-1 md:flex-initial">
-              <Settings className="h-4 w-4 mr-2" />
-              Edit Banking
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    </>
-  );
 
-  const renderInvoiceForm = () => (
-    <>
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Mail className="h-5 w-5" />
-            Customer Information
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="customerName">Customer Name</Label>
-              <Input
-                id="customerName"
-                value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
-                placeholder="Enter customer name"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="customerEmail">Email</Label>
-              <Input
-                id="customerEmail"
-                type="email"
-                value={customerEmail}
-                onChange={(e) => setCustomerEmail(e.target.value)}
-                placeholder="customer@example.com"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="customerPhone">Phone</Label>
-              <Input
-                id="customerPhone"
-                value={customerPhone}
-                onChange={(e) => setCustomerPhone(e.target.value)}
-                placeholder="+27 123 456 789"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="issueDate">Issue Date</Label>
-              <Input
-                id="issueDate"
-                type="date"
-                value={new Date().toISOString().split('T')[0]}
-                onChange={(e) => {}}
-                readOnly
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="dueDate">Due Date</Label>
-              <Input
-                id="dueDate"
-                type="date"
-                value={new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}
-                onChange={(e) => {}}
-                readOnly
-              />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Plus className="h-5 w-5" />
-            Invoice Items
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {availableProducts.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
-              <FileText className="h-12 w-12 mx-auto mb-4 text-gray-400" />
-              <p>No products available. Please select a snapshot from the Pricing Calculator first.</p>
-              <Link href="/pricing-calculator">
-                <Button className="mt-4">Go to Pricing Calculator</Button>
-              </Link>
-            </div>
-          ) : (
-            <div className="flex gap-4">
-              <div className="flex-1">
-                <Select value={selectedProductId} onValueChange={setSelectedProductId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a product to add" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableProducts.map(product => (
-                      <SelectItem key={product.id} value={String(product.id)}>
-                        {product.name} - Suggested Price: R{product.price.toFixed(2)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button onClick={handleAddProduct} disabled={!selectedProductId}>
-                <Plus className="h-4 w-4 mr-2" />
-                Add Product
-              </Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      {quotedProducts.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5" />
-              Invoice Products
+              <Plus className="h-5 w-5" />
+              Add Products to Quote
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {quotedProducts.map(product => (
-                <div key={product.quoteId} className="border rounded-lg p-4 bg-gray-50">
-                  <div className="flex justify-between items-start mb-3">
-                    <h4 className="font-semibold">{product.name}</h4>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => removeQuotedProduct(product.quoteId)}
-                      className="text-red-500 hover:text-red-700"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                  <div className="grid md:grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                      <Label>Quantity</Label>
-                      <Input
-                        type="number"
-                        min="1"
-                        value={product.quantity}
-                        onChange={(e) => updateQuotedProduct(product.quoteId, 'quantity', parseInt(e.target.value) || 1)}
-                      />
+            {availableProducts.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <FileText className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+                <p>No products available. Please select a snapshot from the Pricing Calculator first.</p>
+                <Link href="/pricing-calculator">
+                  <Button className="mt-4">Go to Pricing Calculator</Button>
+                </Link>
+              </div>
+            ) : (
+              <div className="flex gap-4">
+                <div className="flex-1">
+                  <Select value={selectedProductId} onValueChange={setSelectedProductId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a product to add" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableProducts.map(product => (
+                        <SelectItem key={product.id} value={String(product.id)}>
+                          {product.name} — Suggested Price: R{product.price.toFixed(2)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button onClick={handleAddProduct} disabled={!selectedProductId}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Product
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {quotedProducts.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <FileText className="h-5 w-5" />
+                Quoted Products
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {quotedProducts.map(product => (
+                  <div key={product.quoteId} className="border rounded-lg p-4 bg-gray-50">
+                    <div className="flex justify-between items-start mb-3">
+                      <h4 className="font-semibold">{product.name}</h4>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeQuotedProduct(product.quoteId)}
+                        className="text-red-500 hover:text-red-700"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                     </div>
-                    <div className="space-y-2">
-                      <Label>Unit Price</Label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={product.sellingPrice}
-                        onChange={(e) => updateQuotedProduct(product.quoteId, 'sellingPrice', parseFloat(e.target.value) || 0)}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Line Total</Label>
-                      <div className="p-2 bg-amber-100 rounded text-amber-800 font-semibold">
-                        R{calculateLineTotal(product).toFixed(2)}
+                    <div className="grid md:grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label>Quantity</Label>
+                        <Input
+                          type="number"
+                          min="1"
+                          value={product.quantity}
+                          onChange={(e) => updateQuotedProduct(product.quoteId, 'quantity', parseInt(e.target.value, 10) || 1)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Unit Price</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={product.sellingPrice}
+                          onChange={(e) => updateQuotedProduct(product.quoteId, 'sellingPrice', parseFloat(e.target.value) || 0)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Line Total</Label>
+                        <div className="p-2 bg-amber-100 rounded text-amber-800 font-semibold">
+                          R{calculateLineTotal(product).toFixed(2)}
+                        </div>
                       </div>
                     </div>
+                    <div className="mt-2">
+                      <Label>Product Notes</Label>
+                      <Input
+                        value={product.notes || ''}
+                        onChange={(e) => updateQuotedProduct(product.quoteId, 'notes', e.target.value)}
+                        placeholder="e.g., Size, Color, Specific requirements"
+                      />
+                    </div>
                   </div>
-                  <div className="mt-2">
-                    <Label>Product Notes</Label>
-                    <Input
-                      value={product.notes || ''}
-                      onChange={(e) => updateQuotedProduct(product.quoteId, 'notes', e.target.value)}
-                      placeholder="e.g., Size, Color, Specific requirements"
-                    />
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <DollarSign className="h-5 w-5" />
+              Additional Costs
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid md:grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="designCost">Design Cost</Label>
+                <Input id="designCost" type="number" step="0.01" value={designCost} onChange={(e) => setDesignCost(parseFloat(e.target.value) || 0)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="sampleCost">Sample Cost</Label>
+                <Input id="sampleCost" type="number" step="0.01" value={sampleCost} onChange={(e) => setSampleCost(parseFloat(e.target.value) || 0)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="handlingCost">Handling Cost</Label>
+                <Input id="handlingCost" type="number" step="0.01" value={handlingCost} onChange={(e) => setHandlingCost(parseFloat(e.target.value) || 0)} />
+              </div>
+
+              {/* Promotion editor */}
+              <PromoEditor />
             </div>
           </CardContent>
         </Card>
-      )}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <DollarSign className="h-5 w-5" />
-            Additional Costs
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid md:grid-cols-3 gap-4">
+
+        <Card>
+          <CardHeader><CardTitle>Quote Summary</CardTitle></CardHeader>
+          <CardContent>
             <div className="space-y-2">
-              <Label htmlFor="designCost">Design Cost</Label>
-              <Input
-                id="designCost"
-                type="number"
-                step="0.01"
-                value={designCost}
-                onChange={(e) => setDesignCost(parseFloat(e.target.value) || 0)}
-              />
+              <div className="flex justify-between"><span>Lines Subtotal:</span><span>R{t.linesSubtotal.toFixed(2)}</span></div>
+              {t.additionalCosts > 0 && (
+                <div className="flex justify-between"><span>Additional Costs:</span><span>R{t.additionalCosts.toFixed(2)}</span></div>
+              )}
+              {t.discount > 0 && (
+                <div className="flex justify-between"><span>Promotion / Discount:</span><span>-R{t.discount.toFixed(2)}</span></div>
+              )}
+              <div className="flex justify-between"><span>VAT {(t.vatRate * 100).toFixed(0)}%:</span><span>R{t.vatAmount.toFixed(2)}</span></div>
+              <Separator />
+              <div className="flex justify-between text-lg font-bold text-amber-600">
+                <span>Grand Total:</span><span>R{t.grandTotal.toFixed(2)}</span>
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="sampleCost">Sample Cost</Label>
-              <Input
-                id="sampleCost"
-                type="number"
-                step="0.01"
-                value={sampleCost}
-                onChange={(e) => setSampleCost(parseFloat(e.target.value) || 0)}
-              />
+
+            <div className="mt-4">
+              <BankPicker />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="handlingCost">Handling Cost</Label>
-              <Input
-                id="handlingCost"
-                type="number"
-                step="0.01"
-                value={handlingCost}
-                onChange={(e) => setHandlingCost(parseFloat(e.target.value) || 0)}
-              />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex gap-4 flex-wrap">
+              <Button onClick={saveQuotation} disabled={!customerName || quotedProducts.length === 0} className="flex-1 md:flex-initial">
+                <SquarePen className="h-4 w-4 mr-2" />
+                {editingQuotationId ? 'Update Quotation' : 'Save Quotation'}
+              </Button>
+              <Button
+                onClick={() => downloadPdf(getCurrentFormDataAsQuotation(), 'quotation')}
+                disabled={!customerName || quotedProducts.length === 0}
+                className="flex-1 md:flex-initial"
+                variant="outline"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Download PDF
+              </Button>
+              <Button variant="outline" onClick={resetForm} className="flex-1 md:flex-initial">Reset Form</Button>
+              <Button variant="outline" onClick={() => setCurrentView('edit-banking')} className="flex-1 md:flex-initial">
+                <Settings className="h-4 w-4 mr-2" /> Settings
+              </Button>
             </div>
-          </div>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Invoice Summary</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-2">
-            <div className="flex justify-between">
-              <span>Subtotal:</span>
-              <span>R{calculateSubtotal().toFixed(2)}</span>
+          </CardContent>
+        </Card>
+      </>
+    );
+  };
+
+  const renderInvoiceForm = () => {
+    const t = totals();
+    return (
+      <>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Mail className="h-5 w-5" />
+              Customer Information
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="customerName">Customer Name</Label>
+                <Input id="customerName" value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Enter customer name" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="customerEmail">Email</Label>
+                <Input id="customerEmail" type="email" value={customerEmail} onChange={(e) => setCustomerEmail(e.target.value)} placeholder="customer@example.com" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="customerPhone">Phone</Label>
+                <Input id="customerPhone" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="+27 123 456 789" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="issueDate">Issue Date</Label>
+                <Input id="issueDate" type="date" value={new Date().toISOString().split('T')[0]} readOnly />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="dueDate">Due Date</Label>
+                <Input id="dueDate" type="date" value={new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]} readOnly />
+              </div>
             </div>
-            {(designCost > 0 || sampleCost > 0 || handlingCost > 0) && (
-              <div className="flex justify-between">
-                <span>Additional Costs:</span>
-                <span>R{(designCost + sampleCost + handlingCost).toFixed(2)}</span>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Plus className="h-5 w-5" />
+              Invoice Items
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {availableProducts.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <FileText className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+                <p>No products available. Please select a snapshot from the Pricing Calculator first.</p>
+                <Link href="/pricing-calculator">
+                  <Button className="mt-4">Go to Pricing Calculator</Button>
+                </Link>
+              </div>
+            ) : (
+              <div className="flex gap-4">
+                <div className="flex-1">
+                  <Select value={selectedProductId} onValueChange={setSelectedProductId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a product to add" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableProducts.map(product => (
+                        <SelectItem key={product.id} value={String(product.id)}>
+                          {product.name} — Suggested Price: R{product.price.toFixed(2)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button onClick={handleAddProduct} disabled={!selectedProductId}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Product
+                </Button>
               </div>
             )}
-            <Separator />
-            <div className="flex justify-between text-lg font-bold text-amber-600">
-              <span>Grand Total:</span>
-              <span>R{calculateGrandTotal().toFixed(2)}</span>
+          </CardContent>
+        </Card>
+
+        {quotedProducts.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <FileText className="h-5 w-5" />
+                Invoice Products
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {quotedProducts.map(product => (
+                  <div key={product.quoteId} className="border rounded-lg p-4 bg-gray-50">
+                    <div className="flex justify-between items-start mb-3">
+                      <h4 className="font-semibold">{product.name}</h4>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeQuotedProduct(product.quoteId)}
+                        className="text-red-500 hover:text-red-700"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    <div className="grid md:grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label>Quantity</Label>
+                        <Input
+                          type="number"
+                          min="1"
+                          value={product.quantity}
+                          onChange={(e) => updateQuotedProduct(product.quoteId, 'quantity', parseInt(e.target.value, 10) || 1)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Unit Price</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={product.sellingPrice}
+                          onChange={(e) => updateQuotedProduct(product.quoteId, 'sellingPrice', parseFloat(e.target.value) || 0)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Line Total</Label>
+                        <div className="p-2 bg-amber-100 rounded text-amber-800 font-semibold">
+                          R{calculateLineTotal(product).toFixed(2)}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-2">
+                      <Label>Product Notes</Label>
+                      <Input
+                        value={product.notes || ''}
+                        onChange={(e) => updateQuotedProduct(product.quoteId, 'notes', e.target.value)}
+                        placeholder="e.g., Size, Color, Specific requirements"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <DollarSign className="h-5 w-5" />
+              Additional Costs
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid md:grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="designCost">Design Cost</Label>
+                <Input id="designCost" type="number" step="0.01" value={designCost} onChange={(e) => setDesignCost(parseFloat(e.target.value) || 0)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="sampleCost">Sample Cost</Label>
+                <Input id="sampleCost" type="number" step="0.01" value={sampleCost} onChange={(e) => setSampleCost(parseFloat(e.target.value) || 0)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="handlingCost">Handling Cost</Label>
+                <Input id="handlingCost" type="number" step="0.01" value={handlingCost} onChange={(e) => setHandlingCost(parseFloat(e.target.value) || 0)} />
+              </div>
+
+              {/* Promotion editor */}
+              <PromoEditor />
             </div>
-          </div>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardContent className="pt-6">
-          <div className="flex gap-4 flex-wrap">
-            <Button
-              onClick={saveInvoice}
-              disabled={!customerName || quotedProducts.length === 0}
-              className="flex-1 md:flex-initial"
-            >
-              <SquarePen className="h-4 w-4 mr-2" />
-              {editingInvoiceId ? 'Update Invoice' : 'Save Invoice'}
-            </Button>
-            <Button
-              onClick={() => downloadPdf(getCurrentFormDataAsInvoice(), 'invoice')}
-              disabled={!customerName || quotedProducts.length === 0}
-              className="flex-1 md:flex-initial"
-              variant="outline"
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Download PDF
-            </Button>
-            <Button variant="outline" onClick={resetForm} className="flex-1 md:flex-initial">
-              Reset Form
-            </Button>
-            <Button variant="outline" onClick={() => setCurrentView('edit-banking')} className="flex-1 md:flex-initial">
-              <Settings className="h-4 w-4 mr-2" />
-              Edit Banking
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    </>
-  );
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle>Invoice Summary</CardTitle></CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              <div className="flex justify-between"><span>Lines Subtotal:</span><span>R{t.linesSubtotal.toFixed(2)}</span></div>
+              {t.additionalCosts > 0 && (
+                <div className="flex justify-between"><span>Additional Costs:</span><span>R{t.additionalCosts.toFixed(2)}</span></div>
+              )}
+              {t.discount > 0 && (
+                <div className="flex justify-between"><span>Promotion / Discount:</span><span>-R{t.discount.toFixed(2)}</span></div>
+              )}
+              <div className="flex justify-between"><span>VAT {(t.vatRate * 100).toFixed(0)}%:</span><span>R{t.vatAmount.toFixed(2)}</span></div>
+              <Separator />
+              <div className="flex justify-between text-lg font-bold text-amber-600">
+                <span>Grand Total:</span><span>R{t.grandTotal.toFixed(2)}</span>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <BankPicker />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex gap-4 flex-wrap">
+              <Button onClick={saveInvoice} disabled={!customerName || quotedProducts.length === 0} className="flex-1 md:flex-initial">
+                <SquarePen className="h-4 w-4 mr-2" />
+                {editingInvoiceId ? 'Update Invoice' : 'Save Invoice'}
+              </Button>
+              <Button
+                onClick={() => downloadPdf(getCurrentFormDataAsInvoice(), 'invoice')}
+                disabled={!customerName || quotedProducts.length === 0}
+                className="flex-1 md:flex-initial"
+                variant="outline"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Download PDF
+              </Button>
+              <Button variant="outline" onClick={resetForm} className="flex-1 md:flex-initial">Reset Form</Button>
+              <Button variant="outline" onClick={() => setCurrentView('edit-banking')} className="flex-1 md:flex-initial">
+                <Settings className="h-4 w-4 mr-2" /> Settings
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </>
+    );
+  };
+
+  // ---------- LISTS ----------
 
   const renderQuotationList = () => (
     <Card>
@@ -1393,13 +1262,13 @@ export default function Quotations() {
           <List className="h-5 w-5" />
           Saved Quotations ({quotationsList.length})
         </CardTitle>
-        <p className="text-sm text-gray-500">Manage your saved quotations. You can edit, delete, download, convert to invoice, or send them.</p>
+        <p className="text-sm text-gray-500">Manage your saved quotations. Edit, delete, download, convert, or send.</p>
       </CardHeader>
       <CardContent>
         {quotationsList.length === 0 ? (
           <div className="text-center py-8 text-gray-500">
             <FileText className="h-12 w-12 mx-auto mb-4 text-gray-400" />
-            <p>No quotations saved yet. Start by creating a new one!</p>
+            <p>No quotations yet. Create one to get started.</p>
             <Button onClick={() => { resetForm(); setCurrentView('create-quote'); }} className="mt-4">Create New Quotation</Button>
           </div>
         ) : (
@@ -1407,31 +1276,32 @@ export default function Quotations() {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                  <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {quotationsList.map((quote) => (
                   <tr key={quote.id}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{quote.customerName}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{quote.displayName || quote.id}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{quote.customerName}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{quote.quoteDate}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">R{quote.grandTotal.toFixed(2)}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       <Select
                         value={quote.status}
-                        onValueChange={(newStatus: QuotationRecord['status']) => updateQuotationStatus(quote.id, newStatus)}
+                        onValueChange={(v: QuoteStatus) => updateQuotationStatus(quote.id, v)}
                         disabled={isSendingDocument || isDeletingQuotation || quote.status === 'converted_to_invoice' || quote.status === 'expired'}
                       >
-                        <SelectTrigger className={`w-[140px] capitalize ${
+                        <SelectTrigger className={`w-[160px] capitalize ${
                           quote.status === 'sent' ? 'bg-blue-100 text-blue-800' :
                           quote.status === 'accepted' ? 'bg-green-100 text-green-800' :
                           quote.status === 'converted_to_invoice' ? 'bg-purple-100 text-purple-800' :
-                          quote.status === 'expired' ? 'bg-red-100 text-red-800' :
-                          'bg-gray-100 text-gray-800'
+                          quote.status === 'expired' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800'
                         }`}>
                           <SelectValue placeholder="Status" />
                         </SelectTrigger>
@@ -1446,7 +1316,7 @@ export default function Quotations() {
                       </Select>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <div className="flex justify-end space-x-2">
+                      <div className="flex justify-end gap-2">
                         <Button variant="outline" size="sm" onClick={() => loadQuotationForEdit(quote.id)} title="Edit">
                           <SquarePen className="h-4 w-4" />
                         </Button>
@@ -1481,13 +1351,13 @@ export default function Quotations() {
           <ReceiptText className="h-5 w-5" />
           Saved Invoices ({invoicesList.length})
         </CardTitle>
-        <p className="text-sm text-gray-500">Manage your created invoices. You can edit, delete, download, or send them.</p>
+        <p className="text-sm text-gray-500">Manage your invoices. Edit, delete, download, or send.</p>
       </CardHeader>
       <CardContent>
         {invoicesList.length === 0 ? (
           <div className="text-center py-8 text-gray-500">
             <FileText className="h-12 w-12 mx-auto mb-4 text-gray-400" />
-            <p>No invoices created yet. Convert a quotation or create a new invoice.</p>
+            <p>No invoices created yet. Convert a quotation or create a new one.</p>
             <Button onClick={() => { resetForm(); setCurrentView('create-quote'); }} className="mt-4">Create New Quotation</Button>
           </div>
         ) : (
@@ -1495,30 +1365,31 @@ export default function Quotations() {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Invoice No.</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Issue Date</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                  <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Invoice No.</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Issue Date</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {invoicesList.map((invoice) => (
-                  <tr key={invoice.id}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{invoice.invoiceNumber}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{invoice.customerName}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{invoice.issueDate}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">R{invoice.grandTotal.toFixed(2)}</td>
+                {invoicesList.map((inv) => (
+                  <tr key={inv.id}>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{inv.invoiceNumber}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{inv.customerName}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{inv.issueDate}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">R{inv.grandTotal.toFixed(2)}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       <Select
-                        value={invoice.paymentStatus}
-                        onValueChange={(newStatus: InvoiceRecord['paymentStatus']) => updateInvoicePaymentStatus(invoice.id, newStatus)}
+                        value={inv.paymentStatus}
+                        onValueChange={(v: PaymentStatus) => updateInvoicePaymentStatus(inv.id, v)}
                         disabled={isSendingDocument || isDeletingInvoice}
                       >
-                        <SelectTrigger className={`w-[140px] capitalize ${
-                          invoice.paymentStatus === 'paid' ? 'bg-green-100 text-green-800' :
-                          invoice.paymentStatus === 'overdue' ? 'bg-red-100 text-red-800' :
+                        <SelectTrigger className={`w-[160px] capitalize ${
+                          inv.paymentStatus === 'paid' ? 'bg-green-100 text-green-800' :
+                          inv.paymentStatus === 'overdue' ? 'bg-red-100 text-red-800' :
+                          inv.paymentStatus === 'cancelled' ? 'bg-gray-100 text-gray-800' :
                           'bg-yellow-100 text-yellow-800'
                         }`}>
                           <SelectValue placeholder="Status" />
@@ -1532,17 +1403,17 @@ export default function Quotations() {
                       </Select>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <div className="flex justify-end space-x-2">
-                        <Button variant="outline" size="sm" onClick={() => loadInvoiceForEdit(invoice.id)} title="Edit">
+                      <div className="flex justify-end gap-2">
+                        <Button variant="outline" size="sm" onClick={() => loadInvoiceForEdit(inv.id)} title="Edit">
                           <SquarePen className="h-4 w-4" />
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => downloadPdf(invoice, 'invoice')} title="Download PDF">
+                        <Button variant="outline" size="sm" onClick={() => downloadPdf(inv, 'invoice')} title="Download PDF">
                           <Download className="h-4 w-4" />
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => sendDocument(invoice, 'invoice')} title="Send" disabled={isSendingDocument}>
+                        <Button variant="outline" size="sm" onClick={() => sendDocument(inv, 'invoice')} title="Send" disabled={isSendingDocument}>
                           {isSendingDocument ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
                         </Button>
-                        <Button variant="destructive" size="sm" onClick={() => deleteInvoice(invoice.id)} title="Delete" disabled={isDeletingInvoice}>
+                        <Button variant="destructive" size="sm" onClick={() => deleteInvoice(inv.id)} title="Delete" disabled={isDeletingInvoice}>
                           {isDeletingInvoice ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                         </Button>
                       </div>
@@ -1557,6 +1428,198 @@ export default function Quotations() {
     </Card>
   );
 
+  // ---------- SETTINGS (Company + Bank Management + Terms) ----------
+
+  async function reloadBankAccounts() {
+    try {
+      const res = await fetch('/api/bank-accounts');
+      if (!res.ok) throw new Error('Failed to load bank accounts');
+      const list: BankAccount[] = await res.json();
+      setBankAccounts(list);
+
+      // keep selection if still present, else active ones, else first
+      setSelectedBankAccountIds(prev => {
+        const stillThere = prev.filter(id => list.some(b => b.id === id));
+        if (stillThere.length) return stillThere;
+        if (list.length === 0) return [];
+        const actives = list.filter(b => b.isActive).map(b => b.id);
+        return actives.length ? actives : [list[0].id];
+      });
+    } catch (e) {
+      toast({
+        title: 'Bank accounts',
+        description: e instanceof Error ? e.message : 'Failed to reload',
+        variant: 'destructive'
+      });
+    }
+  }
+
+  async function addBank() {
+    try {
+      if (!newBank.bankName || !newBank.bankAccountNumber) {
+        toast({ title: 'Missing fields', description: 'Bank name and account number are required.', variant: 'destructive' });
+        return;
+      }
+      const res = await fetch('/api/bank-accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newBank),
+      });
+      if (!res.ok) throw new Error('Failed to create bank account');
+      setNewBank({ label: '', bankName: '', bankAccountNumber: '', bankBranchCode: '', isActive: true });
+      await reloadBankAccounts();
+      toast({ title: 'Bank account added', description: 'It is now available to print on documents.' });
+    } catch (e) {
+      toast({ title: 'Add bank failed', description: e instanceof Error ? e.message : 'Error', variant: 'destructive' });
+    }
+  }
+
+  async function toggleBank(id: string) {
+    try {
+      const res = await fetch(`/api/bank-accounts/${id}/toggle`, { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to toggle account');
+      await reloadBankAccounts();
+    } catch (e) {
+      toast({ title: 'Toggle failed', description: e instanceof Error ? e.message : 'Error', variant: 'destructive' });
+    }
+  }
+
+  async function deleteBank(id: string) {
+    try {
+      const res = await fetch(`/api/bank-accounts/${id}`, { method: 'DELETE' });
+      if (res.status === 204 || res.ok) {
+        await reloadBankAccounts();
+        toast({ title: 'Bank account deleted' });
+      } else {
+        throw new Error('Failed to delete account');
+      }
+    } catch (e) {
+      toast({ title: 'Delete failed', description: e instanceof Error ? e.message : 'Error', variant: 'destructive' });
+    }
+  }
+
+  const renderSettings = () => (
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Settings className="h-5 w-5" />
+            Company / Banking & Terms
+          </CardTitle>
+          <p className="text-sm text-gray-500">Manage company details, <strong>multiple bank accounts</strong>, and your <strong>Terms</strong>.</p>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* Company quick fields */}
+          <div className="grid md:grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <Label>Company Name</Label>
+              <Input value={companyDetails.name} onChange={(e) => setCompanyDetails(prev => ({ ...prev, name: e.target.value }))} />
+            </div>
+            <div className="space-y-2">
+              <Label>Phone</Label>
+              <Input value={companyDetails.phone} onChange={(e) => setCompanyDetails(prev => ({ ...prev, phone: e.target.value }))} />
+            </div>
+            <div className="space-y-2">
+              <Label>Website</Label>
+              <Input value={companyDetails.website} onChange={(e) => setCompanyDetails(prev => ({ ...prev, website: e.target.value }))} />
+            </div>
+          </div>
+
+          {/* New Bank Account */}
+          <div className="border rounded-lg p-4">
+            <div className="font-semibold mb-2">Add Bank Account</div>
+            <div className="grid md:grid-cols-5 gap-2">
+              <Input placeholder="Label (e.g. Main)" value={newBank.label} onChange={(e) => setNewBank(prev => ({ ...prev, label: e.target.value }))} />
+              <Input placeholder="Bank Name" value={newBank.bankName} onChange={(e) => setNewBank(prev => ({ ...prev, bankName: e.target.value }))} />
+              <Input placeholder="Account Number" value={newBank.bankAccountNumber} onChange={(e) => setNewBank(prev => ({ ...prev, bankAccountNumber: e.target.value }))} />
+              <Input placeholder="Branch Code" value={newBank.bankBranchCode} onChange={(e) => setNewBank(prev => ({ ...prev, bankBranchCode: e.target.value }))} />
+              <Button onClick={addBank}><Plus className="h-4 w-4 mr-1" /> Add</Button>
+            </div>
+          </div>
+
+          {/* Existing accounts */}
+          <div>
+            <Label className="block mb-2">Bank Accounts</Label>
+            <div className="flex flex-col gap-2">
+              {bankAccounts.length === 0 && <p className="text-sm text-gray-500">No bank accounts yet.</p>}
+              {bankAccounts.map(b => (
+                <div key={b.id} className="text-sm border rounded p-3 bg-gray-50 flex items-center justify-between">
+                  <div>
+                    <div className="font-medium">{b.label || b.bankName} {b.isActive ? <Badge className="ml-2">active</Badge> : <Badge variant="secondary" className="ml-2">inactive</Badge>}</div>
+                    <div>{b.bankName} — {b.bankAccountNumber} (Branch: {b.bankBranchCode || '-'})</div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => toggleBank(b.id)}>{b.isActive ? 'Deactivate' : 'Activate'}</Button>
+                    <Button variant="destructive" size="sm" onClick={() => deleteBank(b.id)}><Trash2 className="h-4 w-4" /></Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Terms & Conditions (INLINE — not a child component) */}
+          <Card>
+            <CardHeader><CardTitle>Terms &amp; Conditions</CardTitle></CardHeader>
+            <CardContent className="space-y-2">
+              <div className="flex items-center gap-3">
+                <Label htmlFor="terms">Enter Terms (plain text)</Label>
+                {/* Optional toggle if you ever want to type raw HTML */}
+                {/* <Select value={termsMode} onValueChange={(v: 'plain' | 'html') => setTermsMode(v)}>
+                  <SelectTrigger className="w-[140px]"><SelectValue placeholder="Mode" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="plain">Plain</SelectItem>
+                    <SelectItem value="html">HTML</SelectItem>
+                  </SelectContent>
+                </Select> */}
+              </div>
+              <textarea
+                id="terms"
+                className="w-full h-48 rounded border p-3 text-sm"
+                value={termsInput}
+                onChange={(e) => setTermsInput(e.target.value)}
+                placeholder="Type your terms and conditions here..."
+              />
+              <div className="flex gap-2">
+                <Button
+                  onClick={async () => {
+                    setIsSavingTerms(true);
+                    try {
+                      const body = nl2brHtml(termsInput); // convert plain text to HTML paragraphs
+                      const res = await fetch('/api/terms', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ body }),
+                      });
+                      if (!res.ok) throw new Error('Failed to save terms');
+                      toast({ title: 'Terms saved', description: 'Your changes were saved.' });
+                      localStorage.setItem('termsHtml', body);
+                    } catch (e) {
+                      toast({
+                        title: 'Save failed',
+                        description: e instanceof Error ? e.message : 'Error',
+                        variant: 'destructive',
+                      });
+                    } finally {
+                      setIsSavingTerms(false);
+                    }
+                  }}
+                  disabled={isSavingTerms}
+                >
+                  {isSavingTerms ? 'Saving…' : 'Save Terms'}
+                </Button>
+                <Button variant="outline" onClick={() => setTermsInput('')}>Clear</Button>
+              </div>
+              <p className="text-xs text-gray-500">
+                Line breaks will automatically be converted to paragraphs in the PDF/email.
+              </p>
+            </CardContent>
+          </Card>
+        </CardContent>
+      </Card>
+    </>
+  );
+
+  // --- Render
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 p-6">
       <div className="container mx-auto max-w-4xl">
@@ -1567,7 +1630,9 @@ export default function Quotations() {
               Back to Home
             </Button>
           </Link>
-          <h1 className="text-3xl font-bold text-amber-600">Quotation & Invoice Manager</h1>
+
+          <h1 className="text-3xl font-bold text-amber-600">Quotation &amp; Invoice Manager</h1>
+
           <div className="flex gap-2">
             <Button
               onClick={() => { resetForm(); setCurrentView('create-quote'); }}
@@ -1591,38 +1656,37 @@ export default function Quotations() {
               onClick={() => setCurrentView('edit-banking')}
               variant={currentView === 'edit-banking' ? 'default' : 'outline'}
             >
-              <Settings className="h-4 w-4 mr-2" /> Banking
+              <Settings className="h-4 w-4 mr-2" /> Settings
             </Button>
           </div>
         </div>
+
         {selectedSnapshotId && (
           <Card className="mb-6 border-amber-300 bg-amber-50 shadow-md">
             <CardContent className="p-4 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Tag className="h-5 w-5 text-amber-600" />
-                <span className="text-lg font-semibold text-amber-800">
-                  Current Snapshot for Quotations:
-                </span>
-                <Badge variant="secondary" className="bg-amber-200 text-amber-900">
-                  ID: {selectedSnapshotId}
-                </Badge>
+                <span className="text-lg font-semibold text-amber-800">Current Snapshot for Quotations:</span>
+                <Badge variant="secondary" className="bg-amber-200 text-amber-900">ID: {selectedSnapshotId}</Badge>
               </div>
-              <Button variant="ghost" size="sm" onClick={() => {
-                localStorage.removeItem('selectedQuotationSnapshotId');
-                localStorage.removeItem('selectedQuotationProducts');
-                setSelectedSnapshotId(null);
-                setAvailableProducts([]);
-                setQuotedProducts([]);
-                toast({
-                  title: "Snapshot cleared",
-                  description: "You can now select a new snapshot from the Pricing Calculator.",
-                });
-              }}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  localStorage.removeItem('selectedQuotationSnapshotId');
+                  localStorage.removeItem('selectedQuotationProducts');
+                  setSelectedSnapshotId(null);
+                  setAvailableProducts([]);
+                  setQuotedProducts([]);
+                  toast({ title: 'Snapshot cleared', description: 'Select a new snapshot from the Pricing Calculator.' });
+                }}
+              >
                 Clear Selection
               </Button>
             </CardContent>
           </Card>
         )}
+
         <div className="space-y-6">
           {(currentView === 'create-quote' || currentView === 'edit-quote') && (
             <>
@@ -1632,7 +1696,9 @@ export default function Quotations() {
               {renderQuotationForm()}
             </>
           )}
+
           {currentView === 'list-quotes' && renderQuotationList()}
+
           {(currentView === 'list-invoices' || currentView === 'edit-invoice') && (
             <>
               {currentView === 'list-invoices' && renderInvoiceList()}
@@ -1644,7 +1710,8 @@ export default function Quotations() {
               )}
             </>
           )}
-          {currentView === 'edit-banking' && renderBankingDetailsForm()}
+
+          {currentView === 'edit-banking' && renderSettings()}
         </div>
       </div>
     </div>
