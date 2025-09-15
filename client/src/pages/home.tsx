@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -153,6 +153,7 @@ export default function Home() {
             <h3 className="text-lg font-semibold text-gray-800 mb-2">Smart Analytics</h3>
             <p className="text-gray-600">Get insights into your pricing performance with detailed analytics.</p>
           </div>
+
           <div className="text-center">
             <div className="mx-auto mb-4 p-3 bg-amber-100 rounded-full w-fit">
               <Users className="h-6 w-6 text-amber-600" />
@@ -160,6 +161,7 @@ export default function Home() {
             <h3 className="text-lg font-semibold text-gray-800 mb-2">Competitor Analysis</h3>
             <p className="text-gray-600">Track competitor pricing and get recommendations.</p>
           </div>
+
           <div className="text-center">
             <div className="mx-auto mb-4 p-3 bg-amber-100 rounded-full w-fit">
               <Calculator className="h-6 w-6 text-amber-600" />

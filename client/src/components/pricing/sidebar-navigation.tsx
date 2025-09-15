@@ -63,20 +63,20 @@ interface SidebarNavigationProps {
 const SECURITY_TAB = "security" as unknown as PricingTab;
 
 const tabs = [
-  { id: 'dashboard'  as PricingTab, label: 'Dashboard',           icon: LayoutDashboard },
-  { id: 'setup'      as PricingTab, label: 'Setup',               icon: Settings },
-  { id: 'products'   as PricingTab, label: 'Pricing',             icon: Package },
-  { id: 'suppliers'  as PricingTab, label: 'Suppliers',           icon: BoxSelectIcon  },
-  { id: 'scenarios'  as PricingTab, label: 'What-If Scenarios',   icon: FlaskConical },
-  { id: 'competitors'as PricingTab, label: 'Competitor Pricing',  icon: Users },
-  { id: 'budget'     as PricingTab, label: 'Budget',              icon: Wallet },
-  { id: 'snapshots'  as PricingTab, label: 'Snapshot Manager',    icon: Camera },
-  { id: 'projects'   as PricingTab, label: 'Projects',            icon: Folder },
-  { id: 'tenders'    as PricingTab, label: 'Tender Management',   icon: FileSpreadsheet },
-  { id: 'pricingchat'as PricingTab, label: 'Pricing Chat',        icon: BrainIcon },
+  { id: 'dashboard' as PricingTab, label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'setup' as PricingTab, label: 'Setup', icon: Settings },
+  { id: 'products' as PricingTab, label: 'Pricing', icon: Package },
+  { id: 'suppliers' as PricingTab, label: 'Suppliers', icon: BoxSelectIcon },
+  { id: 'scenarios' as PricingTab, label: 'What-If Scenarios', icon: FlaskConical },
+  { id: 'competitors' as PricingTab, label: 'Competitor Pricing', icon: Users },
+  { id: 'budget' as PricingTab, label: 'Budget', icon: Wallet },
+  { id: 'snapshots' as PricingTab, label: 'Snapshot Manager', icon: Camera },
+  { id: 'projects' as PricingTab, label: 'Projects', icon: Folder },
+  { id: 'tenders' as PricingTab, label: 'Tender Management', icon: FileSpreadsheet },
+  { id: 'pricingchat' as PricingTab, label: 'Pricing Chat', icon: BrainIcon },
 
   // NEW: Change Passwords tab (server-backed)
-  { id: SECURITY_TAB,              label: 'Change Passwords',     icon: Lock },
+  { id: SECURITY_TAB, label: 'Change Passwords', icon: Lock },
 ];
 
 export default function SidebarNavigation({
