@@ -66,8 +66,10 @@ console.log(
 
 const client = new Client({
   connectionString: conn,
-  // Render requires TLS. Setting this keeps local envs from choking on cert chains.
-  ssl: { rejectUnauthorized: false },
+  // RENDER FIX: REMOVE THE MANUAL SSL CONFIGURATION ENTIRELY.
+  // The connection will rely on the ?sslmode=prefer in the URL.
+  // ssl: { rejectUnauthorized: false },  <--- REMOVE THIS LINE
+  
   // Default to your application schema with public as fallback.
   options: '-c search_path=tbs,public',
 });
