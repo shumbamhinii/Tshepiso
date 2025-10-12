@@ -1,115 +1,96 @@
-// server/db.ts
-import { drizzle } from 'drizzle-orm/node-postgres';
-import { Client } from 'pg';
-import * as schema from '@shared/schema';
-
-import 'dotenv/config';
-
-import fs from 'node:fs';
+// server/index.ts
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import dotenv from 'dotenv';
 
-async function ensureEnvLoaded() {
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
+// --- ESM-safe __dirname ---
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-  const candidates = [
-    path.resolve(process.cwd(), '.env'),
-    path.resolve(__dirname, '../.env'),
-    path.resolve(__dirname, '.env'),
-  ];
+// --- Load .env before anything else needs it ---
+const envCandidates = [
+  path.resolve(process.cwd(), '.env'),   // run from repo root
+  path.resolve(__dirname, '../.env'),    // repo root when this file is in /server
+  path.resolve(__dirname, '.env'),       // .env inside /server (fallback)
+];
 
-  for (const p of candidates) {
-    if (fs.existsSync(p)) {
-      const dotenv = await import('dotenv');
-      dotenv.config({ path: p });
-      break;
-    }
+for (const p of envCandidates) {
+  if (fs.existsSync(p)) {
+    dotenv.config({ path: p });
+    break;
   }
 }
-await ensureEnvLoaded();
 
-const raw = process.env.DATABASE_URL;
-if (!raw) {
-  throw new Error(
-    'DATABASE_URL is not set. Example:\n' +
-      'postgresql://<user>:<password>@<host>:<port>/<db>?sslmode=require'
-  );
-}
+import express, { type Request, type Response, type NextFunction } from 'express';
+import { registerRoutes } from './routes';
+import { setupVite, serveStatic, log } from './vite';
 
-// Parse once and build a fully explicit pg config (no connectionString, no sslmode from URL)
-let u: URL;
-try {
-  u = new URL(raw);
-} catch {
-  throw new Error('DATABASE_URL is not a valid URL.');
-}
+// Ensure DB connects after env is loaded
+await import('./db');
 
-const host = u.hostname;
-const port = Number(u.port || 5432);
-const database = decodeURIComponent(u.pathname.replace(/^\//, '') || 'postgres');
-const user = decodeURIComponent(u.username || '');
-const password = decodeURIComponent(u.password || '');
+const app = express();
+app.use(express.json({ limit: "20mb" }));
+app.use(express.urlencoded({ extended: false, limit: "20mb" }));
 
-if (!user || !password) {
-  throw new Error('DATABASE_URL must include username and password.');
-}
+app.use((req, res, next) => {
+  const start = Date.now();
+  const path = req.path;
+  let capturedJsonResponse: unknown;
 
-// Decide SSL strictly here (ignore sslmode in URL).
-// Defaults:
-// - Supabase pooler (port 6543 or *.supabase.com) → no-verify
-// - Render (RENDER=true) → no-verify
-// - Dev (NODE_ENV !== 'production') → no-verify (you can change this to true if you prefer)
-// - Else → true (verify)
-function decideSsl(): false | true | { rejectUnauthorized: false } {
-  const looksSupabase = /supabase\.com$/i.test(host) || port === 6543;
-  const isRender = (process.env.RENDER || '').toLowerCase() === 'true';
-  const isDev = process.env.NODE_ENV !== 'production';
+  const originalResJson = res.json.bind(res) as typeof res.json;
+  (res as any).json = (bodyJson: unknown, ...args: any[]) => {
+    capturedJsonResponse = bodyJson;
+    return originalResJson(bodyJson as any, ...args);
+  };
 
-  // Allow explicit overrides first
-  const override = (process.env.DATABASE_SSL || process.env.PGSSLMODE || '').toLowerCase();
-  if (['disable', 'off', 'false'].includes(override)) return false;
-  if (['no-verify', 'insecure', 'allow'].includes(override)) return { rejectUnauthorized: false };
-  if (['require', 'prefer', 'verify-ca', 'verify-full', 'on', 'true'].includes(override)) return true;
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    if (path.startsWith('/api')) {
+      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
+      if (capturedJsonResponse !== undefined) {
+        try { logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`; } catch {}
+      }
+      if (logLine.length > 80) logLine = logLine.slice(0, 79) + '…';
+      log(logLine);
+    }
+  });
 
-  if (looksSupabase || isRender || isDev) return { rejectUnauthorized: false };
-  return true;
-}
-
-const ssl = decideSsl();
-
-// Hard-nuke libpq/pg sslmode envs that might interfere in some setups
-delete (process.env as any).PGSSLMODE;
-delete (process.env as any).PGSSLROOTCERT;
-delete (process.env as any).PGSSLCRL;
-
-// Optional: print versions to confirm what’s running
-console.log(
-  `[db] node=${process.version} host=${host}:${port} db=${database} user=${user} ssl=${JSON.stringify(ssl)}`
-);
-
-const searchPath = (process.env.DB_SCHEMA && `${process.env.DB_SCHEMA},public`) || 'tbs,public';
-
-// Build config WITHOUT connectionString so nothing overrides our SSL object.
-const client = new Client({
-  host,
-  port,
-  database,
-  user,
-  password,
-  ssl,
-  options: `-c search_path=${searchPath}`,
+  next();
 });
 
-(async () => {
-  try {
-    await client.connect();
-    await client.query(`set search_path to ${searchPath}`);
-    console.log(`DB connected; search_path set to ${searchPath}`);
-  } catch (error) {
-    console.error('Failed to connect to the database client:', error);
-    process.exit(1);
-  }
-})();
+const server = await registerRoutes(app);
 
-export const db = drizzle(client, { schema });
+// Global error handler (don't crash process)
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  const status = err.status || err.statusCode || 500;
+  const message = err.message || 'Internal Server Error';
+  console.error('API Error:', err);
+  res.status(status).json({ message });
+});
+
+// Dev: attach Vite middleware; Prod: serve static
+if (app.get('env') === 'development') {
+  await setupVite(app, server);
+} else {
+  serveStatic(app);
+}
+
+// Always serve on 5000 (API + client)
+//const port = 5000;
+//const host = '127.0.0.1';
+
+// Always use Render's PORT and bind to 0.0.0.0
+const port = Number(process.env.PORT) || 5000;   // Render sets PORT
+const host = '0.0.0.0';                           // NOT 127.0.0.1
+
+// If registerRoutes(app) returns an http.Server, keep using it:
+server.listen(port, host, () => {
+  log(`serving on http://${host}:${port}`);
+});
+
+// (If registerRoutes returns the Express app instead, do:)
+// app.listen(port, host, () => {
+//   log(`serving on http://${host}:${port}`);
+// });
+
