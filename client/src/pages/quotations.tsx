@@ -29,8 +29,215 @@ import {
   buildDocumentHtml, downloadPdfFromHtml, buildHumanDocName
 } from './quote-invoice-utils';
 
+
+
+
+
 export default function Quotations() {
   const { toast } = useToast();
+
+
+  // ---- API helpers (quotations + invoices with items) ----
+type QuotationItemPayload = {
+  productName: string;
+  quantity: number;
+  unitPrice: number;
+  notes?: string;
+};
+
+function toQuotationItems(quotedProducts: QuotedProduct[]): QuotationItemPayload[] {
+  return quotedProducts.map(p => ({
+    productName: p.name,
+    quantity: Number(p.quantity || 1),
+    unitPrice: Number(p.sellingPrice || 0),
+    notes: p.notes || '',
+  }));
+}
+
+async function apiListQuotations() {
+  const r = await fetch('/api/quotations');
+  if (!r.ok) throw new Error('Failed to list quotations');
+  return r.json();
+}
+async function apiGetQuotationWithItems(id: number) {
+  const r = await fetch(`/api/quotations/${id}`);
+  if (!r.ok) throw new Error('Quotation not found');
+  return r.json(); // { header, items }
+}
+async function apiCreateQuotationWithItems(payload: any) {
+  const r = await fetch('/api/quotations', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) {
+    let msg = 'Failed to create quotation';
+    try {
+      const e = await r.json();
+      if (e?.message) msg = e.message;
+      if (e?.errors) msg += `: ${JSON.stringify(e.errors)}`;
+    } catch {}
+    throw new Error(msg);
+  }
+  return r.json();
+}
+
+async function apiUpdateQuotationWithItems(id: number, payload: any) {
+  const r = await fetch(`/api/quotations/${id}`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error('Failed to update quotation');
+  return r.json();
+}
+async function apiDeleteQuotation(id: number) {
+  const r = await fetch(`/api/quotations/${id}`, { method: 'DELETE' });
+  if (!r.ok && r.status !== 204) throw new Error('Failed to delete quotation');
+}
+
+async function apiListInvoices() {
+  const r = await fetch('/api/invoices');
+  if (!r.ok) throw new Error('Failed to list invoices');
+  return r.json();
+}
+async function apiGetInvoiceWithItems(id: number) {
+  const r = await fetch(`/api/invoices/${id}/with-items`);
+  if (!r.ok) throw new Error('Invoice not found');
+  return r.json(); // { header, items }
+}
+async function apiCreateInvoiceWithItems(payload: any) {
+  const r = await fetch('/api/invoices/with-items', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error('Failed to create invoice');
+  return r.json();
+}
+async function apiUpdateInvoiceWithItems(id: number, payload: any) {
+  const r = await fetch(`/api/invoices/${id}/with-items`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error('Failed to update invoice');
+  return r.json();
+}
+async function apiDeleteInvoice(id: number) {
+  const r = await fetch(`/api/invoices/${id}`, { method: 'DELETE' });
+  if (!r.ok && r.status !== 204) throw new Error('Failed to delete invoice');
+}
+
+
+
+// --- Download helpers that always pull items from the server ---
+
+async function downloadQuotationPdf(quoteId: number) {
+  const { header, items } = await apiGetQuotationWithItems(quoteId);
+
+  const quotedProducts = (items || []).map((it: any) => ({
+    id: it.id,
+    originalId: it.originalId ?? it.id,
+    name: it.name ?? it.productName ?? '',
+    notes: it.notes ?? '',
+    quantity: Number(it.quantity ?? 1),
+    sellingPrice: Number(it.unitPrice ?? it.price ?? 0), // ensure unit price gets through
+    expectedUnits: 0,
+    costPerUnit: Number(it.unitPrice ?? it.price ?? 0),
+    price: Number(it.unitPrice ?? it.price ?? 0),
+    quoteId: String(header.id ?? quoteId),
+  }));
+
+  const data: QuotationRecord = {
+    id: String(header.id),
+    displayName: header.displayName,
+    customerName: header.customerName,
+    customerEmail: header.customerEmail,
+    customerPhone: header.customerPhone,
+    quoteDate: header.quoteDate,
+    validUntil: header.validUntil,
+    quotedProducts,
+    designCost: Number(header.designCost || 0),
+    sampleCost: Number(header.sampleCost || 0),
+    handlingCost: Number(header.handlingCost || 0),
+    grandTotal: Number(header.grandTotal || 0),
+    status: header.status,
+    createdAt: header.createdAt,
+    updatedAt: header.updatedAt,
+    promo: (typeof header.promo === 'string' ? JSON.parse(header.promo) : header.promo) || undefined,
+  };
+
+  const html = buildDocumentHtml({
+    data,
+    type: 'quotation',
+    company: companyDetails,
+    bankAccounts,
+    selectedBankAccountIds,
+    termsHtml: nl2brHtml(termsInput),
+    logoUrl,
+  });
+
+  await downloadPdfFromHtml(
+    html,
+    `${(data.displayName || 'quotation')}-${data.customerName}-${data.quoteDate}.pdf`
+  );
+}
+
+async function downloadInvoicePdf(invoiceId: number) {
+  const { header, items } = await apiGetInvoiceWithItems(invoiceId);
+
+  const quotedProducts = (items || []).map((it: any) => ({
+    id: it.id,
+    originalId: it.originalId ?? it.id,
+    name: it.name ?? it.productName ?? '',
+    notes: it.notes ?? '',
+    quantity: Number(it.quantity ?? 1),
+    sellingPrice: Number(it.unitPrice ?? it.price ?? 0),
+    expectedUnits: 0,
+    costPerUnit: Number(it.unitPrice ?? it.price ?? 0),
+    price: Number(it.unitPrice ?? it.price ?? 0),
+    quoteId: String(header.related_quotation_id ?? ''), // optional
+  }));
+
+  const data: InvoiceRecord = {
+    id: String(header.invoice_id),
+    invoiceNumber: header.invoice_number,
+    customerName: header.customer_name,
+    customerEmail: header.customer_email,
+    customerPhone: header.customer_phone,
+    issueDate: header.issue_date,
+    dueDate: header.due_date,
+    quoteDate: header.quote_date,
+    validUntil: header.valid_until,
+    quotedProducts,
+    designCost: Number(header.design_cost || 0),
+    sampleCost: Number(header.sample_cost || 0),
+    handlingCost: Number(header.handling_cost || 0),
+    grandTotal: Number(header.grand_total || header.total_amount || 0),
+    status: header.status,
+    paymentStatus: header.payment_status,
+    relatedQuotationId: header.related_quotation_id ? String(header.related_quotation_id) : null,
+    createdAt: header.created_at,
+    updatedAt: header.updated_at,
+    promo: (typeof header.promo === 'string' ? JSON.parse(header.promo) : header.promo) || undefined,
+  };
+
+  const html = buildDocumentHtml({
+    data,
+    type: 'invoice',
+    company: companyDetails,
+    bankAccounts,
+    selectedBankAccountIds,
+    termsHtml: nl2brHtml(termsInput),
+    logoUrl,
+  });
+
+  await downloadPdfFromHtml(
+    html,
+    `${data.invoiceNumber}-${data.customerName}-${data.issueDate}.pdf`
+  );
+}
 
   // --- Refs (kept for future preview use)
   const quotationPreviewRef = useRef<HTMLDivElement>(null);
@@ -128,43 +335,118 @@ export default function Quotations() {
     [termsMode, termsInput]
   );
 
+  function normalizeInvoice(i: any): InvoiceRecord {
+  const parseDate = (d: any) =>
+    (d ? String(d).slice(0, 10) : '');
+
+  const parseJson = (v: any) => {
+    if (!v) return undefined;
+    try { return typeof v === 'string' ? JSON.parse(v) : v; } catch { return undefined; }
+  };
+
+  return {
+    id: String(i.invoice_id ?? i.id ?? `inv-${Date.now()}-${Math.random().toString(36).slice(2,9)}`),
+    invoiceNumber: i.invoice_number || i.displayName || `INV-${i.invoice_id ?? i.id ?? Math.floor(Math.random()*100000)}`,
+    customerName: i.customer_name ?? i.customerName ?? '',
+    customerEmail: i.customer_email ?? i.customerEmail ?? '',
+    customerPhone: i.customer_phone ?? i.customerPhone ?? '',
+    issueDate: parseDate(i.issue_date ?? i.issueDate ?? new Date().toISOString()),
+    dueDate: parseDate(i.due_date ?? i.dueDate ?? new Date(Date.now()+30*24*60*60*1000).toISOString()),
+    quoteDate: parseDate(i.quote_date ?? i.quoteDate),
+    validUntil: parseDate(i.valid_until ?? i.validUntil),
+    quotedProducts: [],
+
+    designCost: Number(i.design_cost ?? i.designCost ?? 0),
+    sampleCost: Number(i.sample_cost ?? i.sampleCost ?? 0),
+    handlingCost: Number(i.handling_cost ?? i.handlingCost ?? 0),
+
+    // accept multiple possible server keys: grand_total / total_amount
+    grandTotal: Number(
+      i.grand_total ?? i.grandTotal ?? i.total_amount ?? i.totalAmount ?? 0
+    ),
+
+    status: (i.status ?? 'draft') as QuoteStatus,
+    paymentStatus: (i.payment_status ?? i.paymentStatus ?? 'pending') as PaymentStatus,
+
+    relatedQuotationId: i.related_quotation_id
+      ? String(i.related_quotation_id)
+      : (i.quotation_id ? String(i.quotation_id) : null),
+
+    createdAt: i.created_at ?? new Date().toISOString(),
+    updatedAt: i.updated_at ?? new Date().toISOString(),
+    promo: parseJson(i.promo),
+  };
+}
+
+
   // --- Initial load (localStorage)
-  useEffect(() => {
+// --- Initial load (server -> fallback to localStorage) ---
+useEffect(() => {
+  (async () => {
     try {
+      // quotations
+      try {
+        const list = await apiListQuotations();
+        // backend returns headers only; normalize to your UI shape
+        setQuotationsList(
+          (list || []).map((q: any) => ({
+            id: String(q.id),
+            displayName: q.displayName || q.humanNumber || undefined,
+            customerName: q.customerName || q.customer || '',
+            customerEmail: q.customerEmail || '',
+            customerPhone: q.customerPhone || '',
+            quoteDate: q.quoteDate?.slice(0,10) || '',
+            validUntil: q.validUntil?.slice(0,10) || '',
+            quotedProducts: [], // items fetched when editing/opening
+            designCost: Number(q.designCost || 0),
+            sampleCost: Number(q.sampleCost || 0),
+            handlingCost: Number(q.handlingCost || 0),
+            grandTotal: Number(q.grandTotal || 0),
+            status: (q.status || 'draft') as QuoteStatus,
+            createdAt: q.createdAt || new Date().toISOString(),
+            updatedAt: q.updatedAt || new Date().toISOString(),
+            promo: q.promo ? JSON.parse(q.promo) : undefined,
+          }))
+        );
+      } catch { /* fall back to local */ 
+        const storedQuotations = localStorage.getItem('quotations');
+        if (storedQuotations) setQuotationsList(JSON.parse(storedQuotations));
+      }
+
+      // invoices
+try {
+  const list = await apiListInvoices();
+  setInvoicesList((list || []).map(normalizeInvoice));
+} catch {
+  const storedInvoices = localStorage.getItem('invoices');
+  if (storedInvoices) setInvoicesList(JSON.parse(storedInvoices));
+}
+
+
+      // local snapshot/products (unchanged)
       const storedCompanyDetails = localStorage.getItem('companyDetails');
       if (storedCompanyDetails) setCompanyDetails(JSON.parse(storedCompanyDetails));
-
       const storedSnapshotId = localStorage.getItem('selectedQuotationSnapshotId');
       if (storedSnapshotId) setSelectedSnapshotId(storedSnapshotId);
-
       const storedProducts = localStorage.getItem('selectedQuotationProducts');
       if (storedProducts) {
-        const parsedProducts: any[] = JSON.parse(storedProducts);
-        const mapped: Product[] = parsedProducts.map((p: any) => ({
+        const parsed: any[] = JSON.parse(storedProducts);
+        setAvailableProducts(parsed.map((p: any) => ({
           id: Number(p.id),
           name: p.name || 'Unnamed Product',
           price: parseFloat(p.suggestedPrice || p.price || 0),
           costPerUnit: parseFloat(p.costPerUnit || p.cost_per_unit || 0),
           expectedUnits: parseInt(p.expectedUnits || p.expected_units || 1, 10),
           notes: p.notes || ''
-        }));
-        setAvailableProducts(mapped);
+        })));
       }
-
-      const storedQuotations = localStorage.getItem('quotations');
-      if (storedQuotations) setQuotationsList(JSON.parse(storedQuotations));
-
-      const storedInvoices = localStorage.getItem('invoices');
-      if (storedInvoices) setInvoicesList(JSON.parse(storedInvoices));
     } catch (e) {
       console.error(e);
-      toast({
-        title: 'Error loading data',
-        description: 'Some saved data could not be loaded.',
-        variant: 'destructive'
-      });
+      toast({ title: 'Error loading data', description: 'Some data could not be loaded.', variant: 'destructive' });
     }
-  }, [toast]);
+  })();
+}, [toast]);
+
 
   // --- Load Terms once (API -> fallback to localStorage)
   useEffect(() => {
@@ -337,146 +619,308 @@ export default function Quotations() {
   }, []);
 
   // --- Quotation save/load/status/delete
-  const saveQuotation = async () => {
-    if (!customerName || quotedProducts.length === 0) {
-      toast({
-        title: 'Validation Error',
-        description: 'Customer name and at least one product are required.',
-        variant: 'destructive'
+const saveQuotation = async () => {
+  if (!customerName || quotedProducts.length === 0) {
+    toast({ title: 'Validation Error', description: 'Customer name and at least one product are required.', variant: 'destructive' });
+    return;
+  }
+
+  // Get human number once (only for new)
+  let displayName = undefined as string | undefined;
+  try {
+    if (!editingQuotationId) {
+      const resp = await fetch('/api/sequences/next', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ type: 'quotation' })
       });
-      return;
-    }
-
-    const existing = editingQuotationId ? quotationsList.find(q => q.id === editingQuotationId) : null;
-
-    // Try to get a human display name via sequences API (and keep existing if present)
-    let displayName: string | undefined = existing?.displayName;
-    try {
-      if (!displayName) {
-        const resp = await fetch('/api/sequences/next', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ type: 'quotation' })
-        });
-        if (resp.ok) {
-          const { next } = await resp.json();
-          displayName = buildHumanDocName('Quotation', next); // "Quotation X"
-        } else if (nextQuotationNumber) {
-          // fallback to peeked number if POST failed
-          displayName = buildHumanDocName('Quotation', nextQuotationNumber);
-        }
-      }
-    } catch {
-      if (!displayName && nextQuotationNumber) {
-        displayName = buildHumanDocName('Quotation', nextQuotationNumber);
+      if (resp.ok) {
+        const { next } = await resp.json();
+        displayName = buildHumanDocName('Quotation', next);
       }
     }
+  } catch {}
 
-    const t = totals();
+  const items = toQuotationItems(quotedProducts);
+const payload = {
+  header: {
+    displayName,
+    customerName,
+    customerEmail,
+    customerPhone,
+    quoteDate,
+    validUntil,
+    designCost,
+    sampleCost,
+    handlingCost,
+    promo, // server will stringify
+  },
+  items,
+};
 
-    const record: QuotationRecord = {
-      id: editingQuotationId || `quote-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      displayName,
-      customerName,
-      customerEmail,
-      customerPhone,
-      quoteDate,
-      validUntil,
-      quotedProducts,
-      designCost,
-      sampleCost,
-      handlingCost,
-      grandTotal: t.grandTotal,
-      status: editingQuotationId
-        ? (quotationsList.find(q => q.id === editingQuotationId)?.status || 'draft')
-        : 'draft',
-      createdAt: editingQuotationId
-        ? (quotationsList.find(q => q.id === editingQuotationId)?.createdAt || new Date().toISOString())
-        : new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      promo, // <-- persist discount with the quote
-    };
 
+  try {
     if (editingQuotationId) {
-      setQuotationsList(prev => prev.map(q => (q.id === editingQuotationId ? record : q)));
+      const updated = await apiUpdateQuotationWithItems(Number(editingQuotationId.replace(/\D/g, '') || editingQuotationId), payload);
       toast({ title: 'Quotation Updated', description: `Updated quotation for ${customerName}.` });
     } else {
-      setQuotationsList(prev => [...prev, record]);
+      const created = await apiCreateQuotationWithItems(payload);
       toast({ title: 'Quotation Saved', description: `Saved quotation for ${customerName}.` });
     }
-
+    // refresh list from server
+    const list = await apiListQuotations();
+    setQuotationsList((list || []).map((q:any) => ({
+      id: String(q.id),
+      displayName: q.displayName || q.humanNumber || undefined,
+      customerName: q.customerName || q.customer || '',
+      customerEmail: q.customerEmail || '',
+      customerPhone: q.customerPhone || '',
+      quoteDate: q.quoteDate?.slice(0,10) || '',
+      validUntil: q.validUntil?.slice(0,10) || '',
+      quotedProducts: [],
+      designCost: Number(q.designCost || 0),
+      sampleCost: Number(q.sampleCost || 0),
+      handlingCost: Number(q.handlingCost || 0),
+      grandTotal: Number(q.grandTotal || 0),
+      status: (q.status || 'draft') as QuoteStatus,
+      createdAt: q.createdAt || new Date().toISOString(),
+      updatedAt: q.updatedAt || new Date().toISOString(),
+      promo: q.promo ? JSON.parse(q.promo) : undefined,
+    })));
     resetForm();
     setCurrentView('list-quotes');
-  };
+  } catch (e) {
+    console.error(e);
+    toast({ title: 'Save failed', description: e instanceof Error ? e.message : 'Error', variant: 'destructive' });
+  }
+};
 
-  const loadQuotationForEdit = (id: string) => {
-    const q = quotationsList.find(x => x.id === id);
-    if (!q) {
-      toast({ title: 'Error', description: 'Quotation not found.', variant: 'destructive' });
-      return;
-    }
-    setCustomerName(q.customerName);
-    setCustomerEmail(q.customerEmail);
-    setCustomerPhone(q.customerPhone);
-    setQuoteDate(q.quoteDate);
-    setValidUntil(q.validUntil);
-    setQuotedProducts(q.quotedProducts);
-    setDesignCost(q.designCost);
-    setSampleCost(q.sampleCost);
-    setHandlingCost(q.handlingCost);
-    setPromo(q.promo); // <-- restore discount
-    setEditingQuotationId(q.id);
+
+const loadQuotationForEdit = async (id: string) => {
+  try {
+    const full = await apiGetQuotationWithItems(Number(id.replace(/\D/g, '') || id));
+    const q = full.header;
+    const items = (full.items || []).map((it: any) => ({
+      quoteId: `quote-item-${it.id}`,
+      originalId: it.id,
+      id: it.id,
+      name: it.productName,
+      expectedUnits: 1,
+      costPerUnit: 0,
+      price: Number(it.unitPrice || 0),
+      notes: it.notes || '',
+      quantity: Number(it.quantity || 1),
+      sellingPrice: Number(it.unitPrice || 0),
+    })) as QuotedProduct[];
+
+    setCustomerName(q.customerName || '');
+    setCustomerEmail(q.customerEmail || '');
+    setCustomerPhone(q.customerPhone || '');
+    setQuoteDate(q.quoteDate?.slice(0,10) || '');
+    setValidUntil(q.validUntil?.slice(0,10) || '');
+    setQuotedProducts(items);
+    setDesignCost(Number(q.designCost || 0));
+    setSampleCost(Number(q.sampleCost || 0));
+    setHandlingCost(Number(q.handlingCost || 0));
+    setPromo(q.promo ? JSON.parse(q.promo) : undefined);
+    setEditingQuotationId(String(q.id));
     setCurrentView('edit-quote');
-  };
+  } catch (e) {
+    toast({ title: 'Error', description: 'Quotation not found.', variant: 'destructive' });
+  }
+};
+
 
   const updateQuotationStatus = (id: string, newStatus: QuoteStatus) => {
     setQuotationsList(prev => prev.map(q => (q.id === id ? { ...q, status: newStatus, updatedAt: new Date().toISOString() } : q)));
     toast({ title: 'Status Updated', description: `Quotation ${id} → ${newStatus}` });
   };
 
-  const deleteQuotation = (id: string) => {
-    toast({
-      title: 'Confirm Deletion',
-      description: 'This will also delete related invoices.',
-      variant: 'destructive',
-      action: (
-        <Button
-          variant="secondary"
-          onClick={() => {
+const deleteQuotation = (id: string) => {
+  toast({
+    title: 'Confirm Deletion',
+    description: 'This will also delete related invoices.',
+    variant: 'destructive',
+    action: (
+      <Button
+        variant="secondary"
+        onClick={async () => {
+          try {
             setIsDeletingQuotation(true);
-            setQuotationsList(prev => prev.filter(q => q.id !== id));
-            setInvoicesList(prev => prev.filter(inv => inv.relatedQuotationId !== id));
+            await apiDeleteQuotation(Number(id.replace(/\D/g, '') || id));
+            const list = await apiListQuotations();
+            setQuotationsList((list || []).map((q:any)=>({...q, id:String(q.id)})));
             toast({ title: 'Quotation Deleted', description: 'Removed quotation and related invoices.' });
+          } catch (e) {
+            toast({ title: 'Delete failed', description: e instanceof Error ? e.message : 'Error', variant: 'destructive' });
+          } finally {
             setIsDeletingQuotation(false);
-          }}
-          disabled={isDeletingQuotation}
-        >
-          {isDeletingQuotation ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-          Delete
-        </Button>
-      )
-    });
+          }
+        }}
+        disabled={isDeletingQuotation}
+      >
+        {isDeletingQuotation ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+        Delete
+      </Button>
+    )
+  });
+};
+
+    const t = totals();
+
+
+
+  const calculateTotalsFromData = (items: any[], designCost: number, sampleCost: number, handlingCost: number, promo?: any) => {
+    const itemTotal = items.reduce((sum, item) => sum + (Number(item.unitPrice || 0) * Number(item.quantity || 1)), 0);
+
+    let discountAmount = 0;
+    if (promo) {
+      if (promo.type === 'percentage' && promo.value != null) {
+        discountAmount = itemTotal * (Number(promo.value) / 100);
+      } else if (promo.type === 'fixed' && promo.value != null) {
+        discountAmount = Number(promo.value);
+      }
+      discountAmount = Math.max(0, Math.min(discountAmount, itemTotal)); // Ensure discount doesn't exceed itemTotal
+    }
+
+    const grandTotal = itemTotal + designCost + sampleCost + handlingCost - discountAmount;
+    return { itemTotal, discountAmount, grandTotal };
   };
 
-  const convertToInvoice = (quoteId: string) => {
-    const quote = quotationsList.find(q => q.id === quoteId);
-    if (!quote) return;
-    const newInvoice: InvoiceRecord = {
-      ...quote,
-      id: `invoice-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      invoiceNumber: `INV-${Math.floor(10000 + Math.random() * 90000)}`, // will later become "Invoice X" via sequence if desired
-      issueDate: new Date().toISOString().split('T')[0],
-      dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      paymentStatus: 'pending',
-      relatedQuotationId: quoteId,
-      status: 'draft',
-      promo: quote.promo, // <-- carry promo forward
+  // --- Modified convertToInvoice function ---
+// Inside Quotations.tsx, within the convertToInvoice function
+// Inside Quotations.tsx, within the convertToInvoice function
+// Inside Quotations.tsx, within the convertToInvoice function
+const convertToInvoice = async (quoteId: string) => {
+  // simple helper to avoid floating errors
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const VAT_RATE = 0.15;
+
+  try {
+    // 1) Load the full quotation (header + items)
+    const numericId = Number(String(quoteId).replace(/\D/g, '')) || Number(quoteId);
+    const full = await apiGetQuotationWithItems(numericId);
+    const q = full.header || {};
+    const quotationItems = Array.isArray(full.items) ? full.items : [];
+
+    // 2) Calculate items + extra costs
+    const itemTotal = quotationItems.reduce((sum: number, it: any) => {
+      const qty = Number(it.quantity ?? 1);
+      const price = Number(it.unitPrice ?? 0);
+      return sum + qty * price;
+    }, 0);
+
+    const designCost = Number(q.designCost ?? 0);
+    const sampleCost = Number(q.sampleCost ?? 0);
+    const handlingCost = Number(q.handlingCost ?? 0);
+
+    // 3) Discount (supports legacy {type,value} and new {discountType,discountValue})
+    let discountAmount = 0;
+    if (q.promo) {
+      let promoObj: any = q.promo;
+      if (typeof promoObj === 'string') {
+        try { promoObj = JSON.parse(promoObj); } catch { promoObj = null; }
+      }
+
+      if (promoObj) {
+        const type = promoObj.discountType ?? promoObj.type;          // 'percent'|'percentage'|'fixed'
+        const value = promoObj.discountValue ?? promoObj.value;       // number
+        if (type && value != null) {
+          if (type === 'percent' || type === 'percentage') {
+            discountAmount = itemTotal * (Number(value) / 100);
+          } else if (type === 'fixed') {
+            discountAmount = Number(value);
+          }
+        }
+      }
+    }
+    discountAmount = Math.max(0, Math.min(discountAmount, itemTotal)); // cap between 0 and itemTotal
+
+    // 4) Subtotal -> VAT -> Grand Total
+    const subTotal = itemTotal + designCost + sampleCost + handlingCost - discountAmount;
+    const vatAmount = Math.max(0, subTotal * VAT_RATE);
+    const calculatedGrandTotal = round2(subTotal + vatAmount);
+
+    // 5) Transform items to API shape
+    const invoiceItems = quotationItems.map((it: any) => ({
+      name: it.name ?? it.productName ?? 'Item',
+      quantity: Number(it.quantity ?? 1),
+      unitPrice: Number(it.unitPrice ?? 0),
+      notes: it.notes ?? ''
+    }));
+
+    // 6) (Optional) fetch next sequence just for the toast label (NOT sent to server)
+    let invoiceNameForToast: string | undefined;
+    try {
+      const resp = await fetch('/api/sequences/next', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'invoice' })
+      });
+      if (resp.ok) {
+        const { next } = await resp.json();
+        // assumes you already have this util
+        invoiceNameForToast = buildHumanDocName('Invoice', next); // e.g., "INV-12"
+      }
+    } catch (seqErr) {
+      console.error('Failed to get sequence number for toast message:', seqErr);
+    }
+
+    // 7) Build payload — NO invoice_number here (server generates it)
+    const payload = {
+      header: {
+        customer_name: q.customerName ?? null,
+        customer_email: q.customerEmail ?? null,
+        customer_phone: q.customerPhone ?? null,
+        invoice_date: new Date().toISOString().slice(0, 10),
+        due_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+        quote_date: q.quoteDate?.slice?.(0, 10) ?? null,
+        valid_until: q.validUntil?.slice?.(0, 10) ?? null,
+        design_cost: designCost,
+        sample_cost: sampleCost,
+        handling_cost: handlingCost,
+        grand_total: calculatedGrandTotal,   // for convenience; server re-checks
+        total_amount: calculatedGrandTotal,  // NOT NULL column in DB
+        // amount_due is optional; server can set = grand until payments are added
+        amount_due: calculatedGrandTotal,
+        status: 'draft',
+        payment_status: 'pending',
+        project_id: null,
+        related_quotation_id: q.id ?? null,
+        promo: q.promo ?? null              // keep as-is (string or object)
+      },
+      items: invoiceItems
     };
-    setInvoicesList(prev => [...prev, newInvoice]);
-    setQuotationsList(prev => prev.map(q => (q.id === quoteId ? { ...q, status: 'converted_to_invoice' as QuoteStatus } : q)));
-    toast({ title: 'Converted', description: `Quotation → Invoice ${newInvoice.invoiceNumber}` });
+
+    // 8) Create invoice
+    await apiCreateInvoiceWithItems(payload);
+
+    // 9) UI updates
+    setQuotationsList(prev =>
+      prev.map((qq: any) =>
+        String(qq.id) === String(q.id)
+          ? { ...qq, status: 'converted_to_invoice' as QuoteStatus }
+          : qq
+      )
+    );
+
+    const invs = await apiListInvoices();
+    setInvoicesList((invs || []).map(normalizeInvoice));
+
+    toast({
+      title: 'Converted',
+      description: `Quotation → Invoice ${invoiceNameForToast || ''}`
+    });
     setCurrentView('list-invoices');
-  };
+  } catch (e: any) {
+    console.error(e);
+    toast({
+      title: 'Convert failed',
+      description: e?.message || 'Error',
+      variant: 'destructive'
+    });
+  }
+};
+
 
   // --- Invoice save/load/status/delete
   const saveInvoice = async () => {
@@ -488,7 +932,7 @@ export default function Quotations() {
       });
       return;
     }
-
+   
     const existing = editingInvoiceId ? invoicesList.find(i => i.id === editingInvoiceId) : null;
 
     // Try to get a human invoice name via sequences API (optional)
@@ -1320,9 +1764,15 @@ export default function Quotations() {
                         <Button variant="outline" size="sm" onClick={() => loadQuotationForEdit(quote.id)} title="Edit">
                           <SquarePen className="h-4 w-4" />
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => downloadPdf(quote, 'quotation')} title="Download PDF">
-                          <Download className="h-4 w-4" />
-                        </Button>
+<Button
+  variant="outline"
+  size="sm"
+  onClick={() => downloadQuotationPdf(Number(String(quote.id).replace(/\D/g,'')))}
+  title="Download PDF"
+>
+  <Download className="h-4 w-4" />
+</Button>
+
                         <Button variant="outline" size="sm" onClick={() => sendDocument(quote, 'quotation')} title="Send" disabled={isSendingDocument}>
                           {isSendingDocument ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
                         </Button>
@@ -1379,7 +1829,10 @@ export default function Quotations() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{inv.invoiceNumber}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{inv.customerName}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{inv.issueDate}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">R{inv.grandTotal.toFixed(2)}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+  R{Number(inv.grandTotal ?? 0).toFixed(2)}
+</td>
+
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       <Select
                         value={inv.paymentStatus}
@@ -1407,9 +1860,15 @@ export default function Quotations() {
                         <Button variant="outline" size="sm" onClick={() => loadInvoiceForEdit(inv.id)} title="Edit">
                           <SquarePen className="h-4 w-4" />
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => downloadPdf(inv, 'invoice')} title="Download PDF">
-                          <Download className="h-4 w-4" />
-                        </Button>
+<Button
+  variant="outline"
+  size="sm"
+  onClick={() => downloadInvoicePdf(Number(String(inv.id).replace(/\D/g,'')))}
+  title="Download PDF"
+>
+  <Download className="h-4 w-4" />
+</Button>
+
                         <Button variant="outline" size="sm" onClick={() => sendDocument(inv, 'invoice')} title="Send" disabled={isSendingDocument}>
                           {isSendingDocument ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
                         </Button>

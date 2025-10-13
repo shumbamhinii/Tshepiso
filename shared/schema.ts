@@ -117,16 +117,53 @@ export const costs = pgTable("costs", {
 });
 
 // --- NEW: Invoices table definition ---
+// --- UPDATED: tbs.invoices ---
+// --- NEW: Invoices table definition ---
+// --- UPDATED: tbs.invoices - Match DDL exactly ---
 export const invoices = pgTable("invoices", {
   invoice_id: serial("invoice_id").primaryKey(),
-  project_id: integer("project_id").references(() => projects.project_id, { onDelete: 'cascade' }).notNull(),
-  invoice_number: varchar("invoice_number", { length: 255 }).notNull(),
-  issue_date: date("issue_date").defaultNow().notNull(),
-  due_date: date("due_date").notNull(),
-  amount_due: numeric("amount_due").notNull(),
-  status: varchar("status", { length: 50 }).default('pending').notNull(), // e.g., 'pending', 'paid', 'overdue'
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+
+  // project_id might be linked to a different table if the DDL was truncated
+  // Assuming it linked to 'projects' table based on context
+  project_id: integer("project_id")
+    .references(() => projects.project_id, { onDelete: 'cascade' }), // Adjust reference if needed
+
+  // NEW: Use the exact names from the DDL
+  invoice_date: date("invoice_date").notNull(), // <--- Changed: Matches DDL
+  total_amount: numeric("total_amount", { precision: 10, scale: 2 }).notNull(), // <--- Changed: Matches DDL
+
+  status: varchar("status", { length: 50 }).default('draft').notNull(),
+  due_date: date("due_date"), // Nullable based on DDL
+  description: text("description"), // Nullable based on DDL
+
+  // NEW: UI fields (copied from your old definition, adjust if needed)
+  customer_name: varchar("customer_name", { length: 200 }),
+  customer_email: varchar("customer_email", { length: 200 }),
+  customer_phone: varchar("customer_phone", { length: 64 }),
+  quote_date: varchar("quote_date", { length: 16 }),
+  valid_until: varchar("valid_until", { length: 16 }),
+  design_cost: numeric("design_cost").default(0),
+  sample_cost: numeric("sample_cost").default(0),
+  handling_cost: numeric("handling_cost").default(0),
+  grand_total: numeric("grand_total").default(0), // <--- Added: Might exist but was missing in DDL snippet
+
+  // distinguish document lifecycle vs payment lifecycle
+  payment_status: varchar("payment_status", { length: 50 }).default('pending').notNull(), // <--- Changed: Matches DDL
+
+  related_quotation_id: integer("related_quotation_id")
+    .references(() => quotations.id, { onDelete: "set null" }),
+
+  promo: text("promo"), // JSON.stringified promo
+
+  // updatedAt exists in DDL, createdAt doesn't seem to
+  updated_at: timestamp("updated_at").defaultNow().notNull(), // <--- Changed: Matches DDL
+  // createdAt: timestamp("created_at").defaultNow().notNull(), // Removed if not in DDL
+}, (table) => ({
+  // Add unique constraint for invoice_number if it exists in DDL
+  // invoice_number_unique: unique().on(table.invoice_number), // Add if needed and add invoice_number field above
+  schema: 'tbs',
+}));
+
 
 // --- NEW: Suppliers table definition ---
 export const suppliers = pgTable("suppliers", {
@@ -187,6 +224,57 @@ export const sequences = pgTable("sequences", {
   schema: 'tbs',
 }));
 
+// --- NEW: tbs.quotations ---
+export const quotations = pgTable("quotations", {
+  id: serial("id").primaryKey(),
+  displayName: varchar("display_name", { length: 120 }),            // "Quotation X"
+  customerName: varchar("customer_name", { length: 200 }).notNull(),
+  customerEmail: varchar("customer_email", { length: 200 }),
+  customerPhone: varchar("customer_phone", { length: 64 }),
+  quoteDate: varchar("quote_date", { length: 16 }),                  // 'YYYY-MM-DD'
+  validUntil: varchar("valid_until", { length: 16 }),
+  designCost: numeric("design_cost").notNull().default(0),
+  sampleCost: numeric("sample_cost").notNull().default(0),
+  handlingCost: numeric("handling_cost").notNull().default(0),
+  grandTotal: numeric("grand_total").notNull().default(0),
+  status: varchar("status", { length: 40 }).notNull().default("draft"), // draft/sent/accepted/rejected/converted_to_invoice/expired
+  promo: text("promo"),                                               // store JSON.stringified promo
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  schema: "tbs",
+}));
+
+// --- NEW: tbs.quotation_items ---
+export const quotationItems = pgTable("quotation_items", {
+  id: serial("id").primaryKey(),
+  quotationId: integer("quotation_id")
+    .notNull()
+    .references(() => quotations.id, { onDelete: "cascade" }),
+  originalId: integer("original_id"),                                 // snapshot product id (optional)
+  name: varchar("name", { length: 300 }).notNull(),
+  notes: varchar("notes", { length: 500 }),
+  quantity: integer("quantity").notNull(),
+  unitPrice: numeric("unit_price").notNull(),                         // sellingPrice
+}, (table) => ({
+  schema: "tbs",
+}));
+
+// --- NEW: tbs.invoice_items ---
+export const invoiceItems = pgTable("invoice_items", {
+  id: serial("id").primaryKey(),
+  invoiceId: integer("invoice_id")
+    .notNull()
+    .references(() => invoices.invoice_id, { onDelete: "cascade" }),
+  originalId: integer("original_id"),
+  name: varchar("name", { length: 300 }).notNull(),
+  notes: varchar("notes", { length: 500 }),
+  quantity: integer("quantity").notNull(),
+  unitPrice: numeric("unit_price").notNull(),
+}, (table) => ({
+  schema: "tbs",
+}));
+
 
 // --- Select schemas for existing tables (keep as is) ---
 export const selectExpenseSchema = createSelectSchema(expenses);
@@ -245,9 +333,41 @@ export const insertCostSchema = createInsertSchema(costs).omit({
   createdAt: true,
 });
 
+// Use the new invoices schema structure
 export const insertInvoiceSchema = createInsertSchema(invoices).omit({
-  invoice_id: true,
-  createdAt: true,
+  invoice_id: true, // Omit auto-generated ID
+  // createdAt: true,  // Omit if not in DDL
+  updated_at: true,  // Omit, handled by DB
+}).extend({
+  // Make dates optional if you want the DB default to apply
+  invoice_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), // Optional 'YYYY-MM-DD' string
+  due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),     // Optional 'YYYY-MM-DD' string
+
+  // Explicitly coerce numeric fields coming from the UI (if needed, based on Drizzle types)
+  // total_amount, design_cost, sample_cost, handling_cost, grand_total
+  total_amount: z.coerce.number().optional(), // Coerce if sent, but likely required based on DB constraint
+  design_cost: z.coerce.number().optional(),
+  sample_cost: z.coerce.number().optional(),
+  handling_cost: z.coerce.number().optional(),
+  grand_total: z.coerce.number().optional(), // Add this line for grandTotal coercion
+
+  // promo might be sent as an object from the UI, but stored as text
+  promo: z.string().optional().nullable(),
+});
+
+// ... (other schemas) ...
+
+export const insertInvoiceItemSchema = createInsertSchema(invoiceItems).omit({
+  id: true,
+  // Omit invoiceId as the storage layer fills it during the transaction
+  invoiceId: true,
+}).extend({
+  // Coerce numeric fields coming from the UI (which sends numbers via JSON)
+  // The DB column is 'numeric', Zod generated from createInsertSchema often expects string
+  unitPrice: z.coerce.number().nonnegative(), // Expect number, coerce if string, ensure non-negative
+  quantity: z.coerce.number().int().positive(), // Expect number, coerce if string, ensure positive integer
+  // notes might be sent as null, handle if needed
+  // notes: z.string().optional().nullable().default(''),
 });
 
 export const insertSupplierSchema = createInsertSchema(suppliers).omit({
@@ -299,7 +419,84 @@ export type Supplier = z.infer<typeof selectSupplierSchema>;
 export type InsertSupplier = z.infer<typeof insertSupplierSchema>;
 
 export type Tender = z.infer<typeof selectTenderSchema>; // NEW: Export the new Tender type
-export type InsertTender = z.infer<typeof insertTenderSchema>; // NEW: Export the new InsertTender type
+export type InsertTender = z.infer<typeof insertTenderSchema>; 
+
+// --- Select schemas ---
+export const selectQuotationSchema = createSelectSchema(quotations);
+export const selectQuotationItemSchema = createSelectSchema(quotationItems);
+export const selectInvoiceItemSchema = createSelectSchema(invoiceItems);
+
+// --- Insert schemas ---
+// @shared/schema.ts (or wherever your Zod schemas live)
+
+// Quotation header
+// @shared/schema.ts
+
+// ... (other imports and table definitions remain the same) ...
+
+// --- Insert schemas ---
+// Quotation header
+// replace existing export (keep the omit)
+export const insertQuotationSchema = createInsertSchema(quotations).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  // UI sends "YYYY-MM-DD" strings already OK for varchar cols
+  // Coerce numeric costs (drizzle-zod often makes numeric => string)
+  designCost: z.coerce.number().nonnegative().default(0),
+  sampleCost: z.coerce.number().nonnegative().default(0),
+  handlingCost: z.coerce.number().nonnegative().default(0),
+
+  // --- ADD THIS LINE TO COERCE grandTotal TO A NUMBER ---
+  grandTotal: z.coerce.number().nonnegative().default(0),
+
+  // keep promo as string (routes.ts already stringifies if object)
+  promo: z.string().optional().nullable(),
+});
+
+// Quotation items
+// replace existing export (keep the omit)
+export const insertQuotationItemSchema = createInsertSchema(quotationItems).omit({
+  id: true,
+})
+.extend({
+  // allow UI not to send this; server/DB fills it
+  quotationId: z.coerce.number().optional(),
+
+  // UI sends productName; DB column is "name"
+  productName: z.string().min(1).optional(),
+
+  // coerce numerics coming from UI
+  quantity: z.coerce.number().int().positive(),
+  unitPrice: z.coerce.number().nonnegative(),
+})
+.transform((val) => {
+  // normalize to what the DB/storage layer expects
+  const name = val.name ?? val.productName;
+  return { ...val, name };
+});
+
+// ... (rest of the schema.ts remains the same) ...
+
+
+// --- Insert schemas ---
+// ... (other insert schemas remain the same) ...
+
+
+
+// --- Types ---
+// ... (rest remains the same) ...
+
+// --- Types ---
+export type Quotation = z.infer<typeof selectQuotationSchema>;
+export type InsertQuotation = z.infer<typeof insertQuotationSchema>;
+
+export type QuotationItem = z.infer<typeof selectQuotationItemSchema>;
+export type InsertQuotationItem = z.infer<typeof insertQuotationItemSchema>;
+
+export type InvoiceItem = z.infer<typeof selectInvoiceItemSchema>;
+export type InsertInvoiceItem = z.infer<typeof insertInvoiceItemSchema>;
 
 // --- NEW: Access Passwords table (tbs.access_passwords) ---
 export const accessPasswords = pgTable("access_passwords", {

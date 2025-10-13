@@ -97,8 +97,18 @@ export type InvoiceRecord = {
 // ---------- Calculations ----------
 
 export function calculateLineTotal(p: QuotedProduct): number {
-  return (p.sellingPrice || 0) * (p.quantity || 0);
+  const qty = Number(p.quantity ?? 0);
+  const unit = Number(
+    (p as any).sellingPrice ??
+    (p as any).unitPrice ??
+    (p as any).price ??
+    p.costPerUnit ??
+    0
+  );
+  return qty * unit;
 }
+
+
 
 type TotalsInput = {
   items: QuotedProduct[];
@@ -181,15 +191,21 @@ export function buildDocumentHtml(args: BuildHtmlArgs) {
   // Prefer promo passed in; otherwise, use promo saved on the record
   const effectivePromo: Promotion | undefined = args.promo ?? (data as any).promo;
 
-  // Totals for PDF/email
+  // choose items from quotedProducts (quotes) or items (invoices)
+  const list =
+    Array.isArray((data as any).quotedProducts) && (data as any).quotedProducts.length
+      ? (data as any).quotedProducts
+      : (Array.isArray((data as any).items) ? (data as any).items : []);
+
   const totals = calculateTotals({
-    items: (data as any).quotedProducts || [],
+    items: list as any,
     designCost: (data as any).designCost || 0,
     sampleCost: (data as any).sampleCost || 0,
     handlingCost: (data as any).handlingCost || 0,
     vatRate: 0.15,
     promo: effectivePromo,
   });
+
 
   const docNumberLabel = isInvoice ? 'Invoice Number:' : 'Estimate Number:';
   const docNumber = isInvoice ? (data as InvoiceRecord).invoiceNumber : (data as QuotationRecord).displayName || (data as QuotationRecord).id;
@@ -378,19 +394,32 @@ export function buildDocumentHtml(args: BuildHtmlArgs) {
           <th>Amount</th>
         </tr>
       </thead>
-      <tbody>
-        ${((data as any).quotedProducts || []).map((product: any) => `
-          <tr>
-            <td>
-              ${escapeHtml(product.name)}
-              ${product.notes ? `<br><span class="product-description">${escapeHtml(product.notes)}</span>` : ''}
-            </td>
-            <td style="text-align:center">${Number(product.quantity)}</td>
-            <td style="text-align:right">R${Number(product.sellingPrice).toFixed(2)}</td>
-            <td style="text-align:right">R${Number(product.sellingPrice * product.quantity).toFixed(2)}</td>
-          </tr>
-        `).join('')}
+            <tbody>
+        ${list.map((product: any) => {
+          const qty = Number(product.quantity ?? 0);
+          const unit = Number(
+            product.sellingPrice ??
+            product.unitPrice ??
+            product.price ??
+            product.costPerUnit ??
+            0
+          );
+          const amount = unit * qty;
+          return `
+            <tr>
+              <td>
+                ${escapeHtml(product.name ?? '')}
+                ${product.notes ? `<br><span class="product-description">${escapeHtml(product.notes)}</span>` : ''}
+              </td>
+              <td style="text-align:center">${isFinite(qty) ? qty : 0}</td>
+              <td style="text-align:right">R${isFinite(unit) ? unit.toFixed(2) : '0.00'}</td>
+              <td style="text-align:right">R${isFinite(amount) ? amount.toFixed(2) : '0.00'}</td>
+            </tr>
+          `;
+        }).join('')}
       </tbody>
+
+
     </table>
 
     <div class="totals-card">

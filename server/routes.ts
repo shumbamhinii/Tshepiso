@@ -17,7 +17,11 @@ import {
   insertCostSchema,
   insertInvoiceSchema,
   insertSupplierSchema, // NEW: Import the new insertSupplierSchema
-  insertTenderSchema, // NEW: Import the new insertTenderSchema
+  insertTenderSchema,
+  insertQuotationSchema,
+  insertQuotationItemSchema,
+  insertInvoiceItemSchema, 
+   // NEW: Import the new insertTenderSchema
 } from "@shared/schema";
 
 import {
@@ -770,54 +774,93 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/invoices', async (req, res, next) => {
-    try {
-      const validatedData = insertInvoiceSchema.parse(req.body);
-      const invoice = await storage.createInvoice(validatedData);
-      res.status(201).json(invoice);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        res.status(400).json({ message: 'Validation error', errors: error.errors });
-      } else {
-        next(error);
-      }
-    }
-  });
+// helper: get next sequence value using your existing DB function
+// helper: get next sequence value using your existing DB function
+async function getNextSequenceValue(kind: "invoice" | "quotation") {
+  // SAFER VERSION: use a direct interpolated query
+  const result: any = await db.execute(
+    `SELECT tbs.next_sequence('${kind}') AS next`
+  );
 
-  app.put('/api/invoices/:id', async (req, res, next) => {
-    try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ message: 'Invalid Invoice ID' });
-      }
-      const validatedData = insertInvoiceSchema.partial().parse(req.body);
-      const invoice = await storage.updateInvoice(id, validatedData);
-      res.json(invoice);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        res.status(400).json({ message: 'Validation error', errors: error.errors });
-      } else {
-        next(error);
-      }
-    }
-  });
+  const nextValue =
+    (result?.rows && result.rows[0]?.next) ??
+    (Array.isArray(result) && result[0]?.next) ??
+    null;
 
-  app.delete('/api/invoices/:id', async (req, res, next) => {
-    try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ message: 'Invalid Invoice ID' });
-      }
-      const deleted = await storage.deleteInvoice(id);
-      if (deleted) {
-        res.status(204).send();
-      } else {
-        res.status(404).json({ message: 'Invoice not found' });
-      }
-    } catch (error) {
+  if (nextValue == null) throw new Error("Could not get next sequence value");
+  return Number(nextValue);
+}
+
+
+/* -------------------- INVOICES (simple) -------------------- */
+app.post('/api/invoices', async (req, res, next) => {
+  try {
+    const validatedData = insertInvoiceSchema.parse(req.body);
+
+    // Generate "Invoice X" from the DB sequence
+    const next = await getNextSequenceValue("invoice");
+    const invoiceNameFromSequence = `Invoice ${next}`;
+
+    // Add invoice_number to the payload
+    // NOTE: Your DB must have a column named invoice_number (snake_case).
+    // If not, add a migration for it.
+    const invoice = await storage.createInvoice({
+      ...validatedData,
+      // store both snake_case (DB) and camelCase (in case your schema maps it)
+      // Drizzle will only send what exists in your schema.
+  invoice_number: invoiceNameFromSequence, // <--- This line adds the invoice_number
+  invoiceNumber: invoiceNameFromSequence,
+    } as any);
+
+    res.status(201).json(invoice);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ message: 'Validation error', errors: error.errors });
+    } else {
       next(error);
     }
-  });
+  }
+});
+
+app.put('/api/invoices/:id', async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ message: 'Invalid Invoice ID' });
+    }
+
+    const validatedData = insertInvoiceSchema.partial().parse(req.body);
+
+    // Prevent accidental renaming of the invoice number unless you *want* to allow it.
+    const { invoice_number, invoiceNumber, ...rest } = validatedData as any;
+
+    const invoice = await storage.updateInvoice(id, rest);
+    res.json(invoice);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ message: 'Validation error', errors: error.errors });
+    } else {
+      next(error);
+    }
+  }
+});
+
+app.delete('/api/invoices/:id', async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ message: 'Invalid Invoice ID' });
+    }
+    const deleted = await storage.deleteInvoice(id);
+    if (deleted) {
+      res.status(204).send();
+    } else {
+      res.status(404).json({ message: 'Invoice not found' });
+    }
+  } catch (error) {
+    next(error);
+  }
+});
 
   // NEW: Route to send email for documents (quotations/invoices)
   app.post('/api/send-document-email', async (req, res, next) => {
@@ -1311,13 +1354,14 @@ app.get("/api/sequences/peek", async (req, res, next) => {
 
 // Atomically get the next number AND increment counter
 // POST /api/sequences/next  { "type": "quotation" | "invoice" }
+// GOOD: routes.ts
 app.post("/api/sequences/next", async (req, res, next) => {
   try {
-    const { type } = sequenceTypeSchema.parse(req.body); // validates to 'quotation' | 'invoice'
-    // Call the DB function we created in SQL: tbs.next_sequence(text)
-    // Drizzle .execute() returns driver-specific rows; destructure accordingly.
-    const result: any = await db.execute(`SELECT tbs.next_sequence($1) AS next`, [type]);
-    // For node-postgres, the row is usually at result.rows[0]
+    // Expect { type: "quotation" | "invoice" }
+    const { type } = z.object({ type: sequenceTypeSchema }).parse(req.body);
+
+    const result: any = await db.execute(`SELECT tbs.next_sequence('${type}') AS next`);
+
     const nextValue =
       (result?.rows && result.rows[0]?.next) ??
       (Array.isArray(result) && result[0]?.next) ??
@@ -1336,6 +1380,312 @@ app.post("/api/sequences/next", async (req, res, next) => {
   }
 });
 
+
+// --- NEW: Quotations with Items ---
+app.get('/api/quotations', async (req, res, next) => {
+  try {
+    const quotations = await storage.getAllQuotations();
+    res.json(quotations);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/api/quotations/:id', async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ message: 'Invalid quotation ID' });
+
+    const data = await storage.getQuotationWithItems(id);
+    if (!data) return res.status(404).json({ message: 'Quotation not found' });
+
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// routes.ts
+// POST /api/quotations  — expects { header, items }
+// routes.ts
+// routes.ts  (inside POST /api/quotations)
+// routes.ts
+app.post('/api/quotations', async (req, res, next) => {
+  try {
+    const body = { ...req.body };
+
+    // promo: accept object or string anywhere and stringify
+    const coercePromoToString = (p: any) =>
+      typeof p === 'string' ? p : (p ? JSON.stringify(p) : undefined);
+
+    // accept both shapes: { header, items } OR flat + items
+    const headerSource = body.header ?? body;
+
+    const header = {
+      displayName: headerSource.displayName,
+      customerName: headerSource.customerName,
+      customerEmail: headerSource.customerEmail,
+      customerPhone: headerSource.customerPhone,
+      quoteDate: headerSource.quoteDate ?? null,     // keep as string (YYYY-MM-DD)
+      validUntil: headerSource.validUntil ?? null,   // keep as string
+      designCost: Number(headerSource.designCost ?? 0),
+      sampleCost: Number(headerSource.sampleCost ?? 0),
+      handlingCost: Number(headerSource.handlingCost ?? 0),
+      grandTotal: Number(headerSource.grandTotal ?? 0),
+      status: headerSource.status ?? 'draft',
+      promo: coercePromoToString(headerSource.promo),
+    };
+
+    // items may come under body.items or header.items
+    const rawItems = (body.items ?? headerSource.items ?? []) as any[];
+    const itemCompat = z.object({
+      // IMPORTANT: DB column is "name"
+      name: z.string().min(1),
+      quantity: z.coerce.number().int().positive(),
+      unitPrice: z.coerce.number().nonnegative(),
+      notes: z.string().optional().nullable(),
+    });
+
+    // normalize from UI names
+    const items = rawItems.map(it => ({
+      name: String(it.name ?? it.productName ?? '').trim(), // <-- normalize here
+      quantity: Number(it.quantity ?? 0),
+      unitPrice: Number(it.unitPrice ?? it.price ?? 0),
+      notes: (it.notes ?? '') + '',
+    }));
+
+    // validate (no quotationId here)
+    const validated = z.object({
+      header: insertQuotationSchema, // matches your drizzle columns (strings for dates)
+      items: z.array(itemCompat),
+    }).parse({ header, items });
+
+    // generate displayName if missing
+    if (!validated.header.displayName || !validated.header.displayName.trim()) {
+      const result: any = await db.execute(`SELECT tbs.next_sequence('quotation') AS next`);
+      const nextVal =
+        (result?.rows && result.rows[0]?.next) ??
+        (Array.isArray(result) && result[0]?.next) ??
+        1;
+      validated.header.displayName = `Quotation ${Number(nextVal)}`;
+    }
+
+    // create
+    const q = await storage.createQuotationWithItems(validated);
+    res.status(201).json(q);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      console.error('Zod validation error (/api/quotations):', JSON.stringify(err.errors, null, 2));
+      return res.status(400).json({ message: 'Validation error', errors: err.errors });
+    }
+    next(err);
+  }
+});
+
+
+
+
+
+
+
+app.put('/api/quotations/:id', async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id);
+    const q = await storage.updateQuotationWithItems(id, req.body);
+    res.json(q);
+  } catch (err) {
+    if (err instanceof z.ZodError)
+      return res.status(400).json({ message: 'Validation error', errors: err.errors });
+    next(err);
+  }
+});
+
+app.delete('/api/quotations/:id', async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id);
+    const ok = await storage.deleteQuotation(id);
+    if (!ok) return res.status(404).json({ message: 'Quotation not found' });
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- NEW: Invoices with Items ---
+app.get('/api/invoices/:id/with-items', async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ message: 'Invalid invoice ID' });
+
+    const data = await storage.getInvoiceWithItems(id);
+    if (!data) return res.status(404).json({ message: 'Invoice not found' });
+
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ... (other imports and route definitions) ...
+
+// --- Find the existing /api/invoices/with-items route ---
+// --- Invoices: create with items (Drizzle-based, no pg.Pool) ---
+app.post('/api/invoices/with-items', async (req, res, next) => {
+  try {
+    const { header, items } = req.body ?? {};
+    if (!header || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ message: 'header + items required' });
+    }
+
+    // ---- Helpers ----
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const qs = (v: any) => {
+      if (v === null || v === undefined) return 'NULL';
+      if (typeof v === 'number') return String(v);
+      // date strings: allow yyyy-mm-dd thru as string
+      const s = String(v);
+      // escape single quotes for raw SQL
+      return `'${s.replace(/'/g, "''")}'`;
+    };
+
+    // normalize/parse promo
+    let promo: any = null;
+    if (header.promo) {
+      try { promo = typeof header.promo === 'string' ? JSON.parse(header.promo) : header.promo; } catch {}
+    }
+
+    // compute server-side totals (same logic as frontend)
+    const linesTotal = items.reduce(
+      (s: number, it: any) => s + Number(it.unitPrice || 0) * Number(it.quantity || 1),
+      0
+    );
+
+    const design   = Number(header.design_cost   || 0);
+    const sample   = Number(header.sample_cost   || 0);
+    const handling = Number(header.handling_cost || 0);
+
+    const type  = promo?.discountType ?? promo?.type;
+    const value = promo?.discountValue ?? promo?.value;
+
+    let discount = 0;
+    if (type && value != null) {
+      const pct = (type === 'percent' || type === 'percentage');
+      discount = pct ? linesTotal * (Number(value) / 100) : Number(value);
+      discount = Math.max(0, Math.min(discount, linesTotal));
+    }
+
+    const subTotal = linesTotal + design + sample + handling - discount;
+    const vatRate  = 0.15;
+    const vat      = Math.max(0, subTotal * vatRate);
+    const grand    = round2(subTotal + vat);
+
+    // Transaction (no Pool needed)
+    const result = await db.transaction(async (tx) => {
+      // get next seq for invoice_number
+      const seqResp: any = await tx.execute(`SELECT tbs.next_sequence('invoice') AS next`);
+      const nextVal =
+        (seqResp?.rows && seqResp.rows[0]?.next) ??
+        (Array.isArray(seqResp) && seqResp[0]?.next) ??
+        null;
+      if (nextVal == null) throw new Error('Could not get next invoice sequence');
+      const invoice_number = `INV-${Number(nextVal)}`;
+
+      // prepare invoice insert
+      const project_id   = header.project_id ?? null;
+      const invoice_date = header.invoice_date ?? new Date().toISOString().slice(0,10);
+      const status       = header.status ?? 'draft';
+      const due_date     = header.due_date ?? null;
+      const description  = header.description ?? null;
+
+      const customer_name  = header.customer_name ?? null;
+      const customer_email = header.customer_email ?? null;
+      const customer_phone = header.customer_phone ?? null;
+
+      const quote_date  = header.quote_date ?? null;
+      const valid_until = header.valid_until ?? null;
+
+      const payment_status        = header.payment_status ?? 'pending';
+      const related_quotation_id  = header.related_quotation_id ?? null;
+      const promoText             = promo ? JSON.stringify(promo) : null;
+
+      const issue_date  = header.issue_date ?? new Date().toISOString().slice(0,10);
+      const amount_due  = grand;
+
+      const insertInvSQL = `
+        INSERT INTO tbs.invoices (
+          project_id, invoice_date, total_amount, status, due_date, description,
+          customer_name, customer_email, customer_phone,
+          quote_date, valid_until,
+          design_cost, sample_cost, handling_cost,
+          grand_total, payment_status, related_quotation_id, promo,
+          invoice_number, issue_date, amount_due
+        )
+        VALUES (
+          ${qs(project_id)}, ${qs(invoice_date)}, ${qs(grand)}, ${qs(status)}, ${qs(due_date)}, ${qs(description)},
+          ${qs(customer_name)}, ${qs(customer_email)}, ${qs(customer_phone)},
+          ${qs(quote_date)}, ${qs(valid_until)},
+          ${qs(design)}, ${qs(sample)}, ${qs(handling)},
+          ${qs(grand)}, ${qs(payment_status)}, ${qs(related_quotation_id)}, ${qs(promoText)},
+          ${qs(invoice_number)}, ${qs(issue_date)}, ${qs(amount_due)}
+        )
+        RETURNING invoice_id, invoice_number
+      `;
+
+      const inserted: any = await tx.execute(insertInvSQL);
+      const row =
+        (inserted?.rows && inserted.rows[0]) ||
+        (Array.isArray(inserted) && inserted[0]) ||
+        null;
+
+      if (!row?.invoice_id) throw new Error('Failed to insert invoice');
+      const invoice_id = Number(row.invoice_id);
+
+      // bulk insert items
+      if (items.length) {
+        // build VALUES list safely (escaped via qs)
+        const values = items.map((it: any) => {
+          const original_id = it.originalId ?? null;
+          const name  = it.name ?? it.productName ?? 'Item';
+          const notes = it.notes ?? null;
+          const qty   = Number(it.quantity || 1);
+          const price = Number(it.unitPrice || 0);
+          return `(${qs(invoice_id)}, ${qs(original_id)}, ${qs(name)}, ${qs(notes)}, ${qs(qty)}, ${qs(price)})`;
+        }).join(',\n');
+
+        const insertItemsSQL = `
+          INSERT INTO tbs.invoice_items (invoice_id, original_id, "name", notes, quantity, unit_price)
+          VALUES ${values}
+        `;
+        await tx.execute(insertItemsSQL);
+      }
+
+      return { invoice_id, invoice_number };
+    });
+
+    return res.json(result);
+  } catch (e: any) {
+    console.error('POST /api/invoices/with-items error:', e);
+    return res.status(500).json({ message: e?.message || 'Failed to create invoice' });
+  }
+});
+
+
+
+// ... (rest of routes.ts) ...
+
+// ... (rest of the routes file) ...
+
+app.put('/api/invoices/:id/with-items', async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id);
+    const invoice = await storage.updateInvoiceWithItems(id, req.body);
+    res.json(invoice);
+  } catch (err) {
+    if (err instanceof z.ZodError)
+      return res.status(400).json({ message: 'Validation error', errors: err.errors });
+    next(err);
+  }
+});
 
 
   const httpServer = createServer(app);
