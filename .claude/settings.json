@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cd \"C:\\\\Users\\\\onrmhizha\\\\Tshepiso\"; $env:NODE_ENV=\"development\"; Start-Process -FilePath \"npm\" -ArgumentList \"run\",\"dev\" -PassThru -WindowStyle Hidden | Select-Object Id; Start-Sleep -Seconds 8; Write-Output \"Server started\")",
+      "Bash(npm run *)",
+      "Bash(echo \"PID:$!\")",
+      "Bash(curl -s http://localhost:5000/api/quote-config)"
+    ]
+  }
+}

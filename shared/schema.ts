@@ -1,5 +1,5 @@
 // @shared/schema.ts
-import { pgTable, serial, text, varchar, numeric, date, integer, boolean, timestamp, unique } from 'drizzle-orm/pg-core';
+import { pgTable, serial, text, varchar, numeric, date, integer, boolean, timestamp, unique, jsonb } from 'drizzle-orm/pg-core';
 import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
 import { z } from 'zod';
 import { uuid } from 'drizzle-orm/pg-core';
@@ -497,6 +497,39 @@ export type InsertQuotationItem = z.infer<typeof insertQuotationItemSchema>;
 
 export type InvoiceItem = z.infer<typeof selectInvoiceItemSchema>;
 export type InsertInvoiceItem = z.infer<typeof insertInvoiceItemSchema>;
+
+// --- NEW: Quote Pricing Config (singleton — one row for the whole business) ---
+export const quotePricingConfig = pgTable("quote_pricing_config", {
+  id: text("id").primaryKey().$default(() => "singleton"),
+  config: jsonb("config").notNull().default({}),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  schema: 'tbs',
+}));
+
+// --- NEW: Quote Templates (named saved configurations) ---
+export const quoteTemplates = pgTable("quote_templates", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  config: jsonb("config").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  schema: 'tbs',
+}));
+
+export const selectQuotePricingConfigSchema = createSelectSchema(quotePricingConfig);
+export const selectQuoteTemplateSchema      = createSelectSchema(quoteTemplates);
+
+export type QuotePricingConfig = z.infer<typeof selectQuotePricingConfigSchema>;
+export type QuoteTemplate      = z.infer<typeof selectQuoteTemplateSchema>;
+
+// --- Company Settings (singleton — one row for the whole business) ---
+export const companySettings = pgTable("company_settings", {
+  id:        text("id").primaryKey().$default(() => "singleton"),
+  settings:  jsonb("settings").notNull().default({}),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 // --- NEW: Access Passwords table (tbs.access_passwords) ---
 export const accessPasswords = pgTable("access_passwords", {

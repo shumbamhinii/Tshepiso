@@ -214,7 +214,7 @@ const TenderManagementTab: React.FC<Props> = ({ products, defaultMarginPct = 0, 
         id: String(curr.id), // Convert number to string for existing CatalogItem type
         supplierName: curr.supplierName,
         sku: curr.sku || undefined, // Convert null to undefined
-        productName: curr.productName,
+        productName: curr.productName || "",
         unit: curr.unit || undefined, // Convert null to undefined
         price: Number(curr.price), // Ensure price is a number
         currency: curr.currency || "ZAR", // Ensure currency is passed
@@ -240,7 +240,7 @@ const TenderManagementTab: React.FC<Props> = ({ products, defaultMarginPct = 0, 
       id: String(it.id),
       supplierName: it.supplierName,
       sku: it.sku || undefined,
-      productName: it.productName,
+      productName: it.productName || "",
       unit: it.unit || undefined,
       price: Number(it.price),
       currency: it.currency || "ZAR",
@@ -322,7 +322,7 @@ const TenderManagementTab: React.FC<Props> = ({ products, defaultMarginPct = 0, 
       const next = { ...prev, tenderItems: prev.tenderItems.map(it => {
         const opts = findOptionsFor(it.description, 6);
         const cheapest = opts.reduce<TenderSupplierOption | undefined>((b,c)=>!b||c.price<b.price?c:b, undefined);
-        const keep = it.chosenSourceId && opts.find(o => o.sourceId === it.chosenSourceId);
+        const keep = (it.chosenSourceId && opts.find(o => o.sourceId === it.chosenSourceId)) || undefined;
         const chosen = keep?.sourceId ?? cheapest?.sourceId;
         const chosenPrice = keep?.price ?? cheapest?.price ?? it.costPerUnit;
         return { ...it, supplierOptions: opts, chosenSourceId: chosen, costPerUnit: chosenPrice };
@@ -362,17 +362,17 @@ const TenderManagementTab: React.FC<Props> = ({ products, defaultMarginPct = 0, 
   // Kept as placeholders for reference if needed elsewhere.
   const handleSaveSupplierItem = async (item: CatalogItem) => {
     // This logic should ideally reside in the dedicated SupplierManagerPanel's context
-    toast({ title: "Info", description: "Supplier item saving is handled by the Supplier Manager tab.", variant: "info" });
+    toast({ title: "Info", description: "Supplier item saving is handled by the Supplier Manager tab.", variant: "default" });
   };
 
   const handleDeleteSupplierItem = async (supplierName: string, id: string) => {
     // This logic should ideally reside in the dedicated SupplierManagerPanel's context
-    toast({ title: "Info", description: "Supplier item deletion is handled by the Supplier Manager tab.", variant: "info" });
+    toast({ title: "Info", description: "Supplier item deletion is handled by the Supplier Manager tab.", variant: "default" });
   };
 
   const handleRenameSupplierApi = async (oldName: string, newName: string) => {
     // This logic should ideally reside in the dedicated SupplierManagerPanel's context
-    toast({ title: "Info", description: "Supplier renaming is handled by the Supplier Manager tab.", variant: "info" });
+    toast({ title: "Info", description: "Supplier renaming is handled by the Supplier Manager tab.", variant: "default" });
   };
 
   const handleReprice = () => { setState(s => recalc(s)); if (state.pricingMode === "margin" && onUseMargin) onUseMargin(state.targetMarginPct); toast({ title: "Pricing updated", description: "Suggested prices refreshed." }); };
@@ -411,7 +411,7 @@ const TenderManagementTab: React.FC<Props> = ({ products, defaultMarginPct = 0, 
         pricingMode: state.pricingMode,
         targetMarginPct: Number(state.targetMarginPct || 0), // Ensure number and handle potential NaN
         targetProfitAbsolute: Number(state.targetProfitAbsolute || 0), // Ensure number and handle potential NaN
-        items: JSON.stringify(itemsPayload), // STRINGIFY THE ITEMS ARRAY
+        items: JSON.stringify(itemsPayload) as unknown as TenderItem[], // serialised for API
       };
 
       const isNewTender = tenderId === null;
@@ -450,7 +450,7 @@ const TenderManagementTab: React.FC<Props> = ({ products, defaultMarginPct = 0, 
       setState(s => ({
         ...s,
         // PARSE THE ITEMS STRING BACK TO AN ARRAY
-        tenderItems: data.items ? (JSON.parse(data.items as string) as TenderItem[]) : [],
+        tenderItems: data.items ? (JSON.parse(data.items as unknown as string) as TenderItem[]) : [],
         pricingMode: data.pricingMode || "margin",
         targetMarginPct: Number(data.targetMarginPct || 0), // Ensure it's a number
         targetProfitAbsolute: Number(data.targetProfitAbsolute || 0), // Ensure it's a number

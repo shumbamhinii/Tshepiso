@@ -32,6 +32,11 @@ import {
   // Tenders
   tenders, type Tender, type InsertTender,
 
+  // Quote config & templates
+  quotePricingConfig,
+  quoteTemplates,
+  companySettings,
+
   // Access control
   accessPasswords,
 } from "@shared/schema";
@@ -156,6 +161,20 @@ export interface IStorage {
   updateTender(id: number, tender: Partial<InsertTender>): Promise<Tender>;
   deleteTender(id: number): Promise<boolean>;
 
+  // --- Company Settings ---
+  getCompanySettings(): Promise<Record<string, unknown>>;
+  upsertCompanySettings(settings: Record<string, unknown>): Promise<void>;
+
+  // --- Quote Pricing Config (shared defaults) ---
+  getQuotePricingConfig(): Promise<Record<string, unknown>>;
+  upsertQuotePricingConfig(config: Record<string, unknown>): Promise<void>;
+  patchQuotePricingConfig(patch: Record<string, unknown>): Promise<void>;
+
+  // --- Quote Templates ---
+  getAllQuoteTemplates(): Promise<{ id: number; name: string; config: unknown; createdAt: Date; updatedAt: Date }[]>;
+  createQuoteTemplate(name: string, config: Record<string, unknown>): Promise<{ id: number; name: string; config: unknown; createdAt: Date; updatedAt: Date }>;
+  deleteQuoteTemplate(id: number): Promise<boolean>;
+
   // --- Access passwords ---
   setAccessPassword(area: "pricing" | "quotations", plain: string): Promise<void>;
   verifyAccessPassword(area: "pricing" | "quotations", plain: string): Promise<boolean>;
@@ -211,8 +230,40 @@ export class PgStorage implements IStorage {
     const result = await db.delete(snapshots).where(eq(snapshots.id, id)).returning({ id: snapshots.id });
     return result.length > 0;
   }
-  async getAllSnapshots(): Promise<Snapshot[]> {
-    return db.select().from(snapshots).where(eq(snapshots.isArchived, false));
+// 👇 UPDATE THIS METHOD
+async getAllSnapshots(): Promise<Snapshot[]> {
+    // 1. Fetch the snapshot headers (the main rows from tbs.snapshots)
+    const rows = await db
+      .select()
+      .from(snapshots)
+      .where(eq(snapshots.isArchived, false))
+      .orderBy(desc(snapshots.createdAt));
+
+    // 2. For each snapshot, fetch its related expenses and products count
+    const result = await Promise.all(
+      rows.map(async (snap) => {
+        // Fetch expenses linked by snapshot_id
+        const snapExpenses = await db
+          .select()
+          .from(expenses)
+          .where(eq(expenses.snapshotId, snap.id));
+
+        // Fetch products to get the count (optional, but good for UI)
+        const snapProducts = await db
+          .select()
+          .from(snapshotProducts)
+          .where(eq(snapshotProducts.snapshotId, snap.id));
+
+        // Return the merged object so the frontend receives the full tree
+        return {
+          ...snap,
+          expenses: snapExpenses,       // This populates the breakdown list
+          productsCount: snapProducts.length // This fixes the "0" badge count
+        };
+      })
+    );
+
+    return result;
   }
   async getArchivedSnapshots(): Promise<Snapshot[]> {
     return db.select().from(snapshots).where(eq(snapshots.isArchived, true));
@@ -471,6 +522,57 @@ export class PgStorage implements IStorage {
   }
   async deleteTender(id: number): Promise<boolean> {
     const result = await db.delete(tenders).where(eq(tenders.id, id)).returning({ id: tenders.id });
+    return result.length > 0;
+  }
+
+  // --- Company Settings ---
+  async getCompanySettings(): Promise<Record<string, unknown>> {
+    const rows = await db.select().from(companySettings).limit(1);
+    return (rows[0]?.settings as Record<string, unknown>) ?? {};
+  }
+  async upsertCompanySettings(settings: Record<string, unknown>): Promise<void> {
+    await db
+      .insert(companySettings)
+      .values({ id: "singleton", settings, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: companySettings.id,
+        set: { settings, updatedAt: new Date() },
+      });
+  }
+
+  // --- Quote Pricing Config ---
+  async getQuotePricingConfig(): Promise<Record<string, unknown>> {
+    const rows = await db.select().from(quotePricingConfig).limit(1);
+    return (rows[0]?.config as Record<string, unknown>) ?? {};
+  }
+  async upsertQuotePricingConfig(config: Record<string, unknown>): Promise<void> {
+    await db
+      .insert(quotePricingConfig)
+      .values({ id: "singleton", config, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: quotePricingConfig.id,
+        set: { config, updatedAt: new Date() },
+      });
+  }
+  async patchQuotePricingConfig(patch: Record<string, unknown>): Promise<void> {
+    const existing = await this.getQuotePricingConfig();
+    const merged = { ...existing, ...patch };
+    await this.upsertQuotePricingConfig(merged);
+  }
+
+  // --- Quote Templates ---
+  async getAllQuoteTemplates() {
+    return db.select().from(quoteTemplates).orderBy(desc(quoteTemplates.createdAt));
+  }
+  async createQuoteTemplate(name: string, config: Record<string, unknown>) {
+    const result = await db
+      .insert(quoteTemplates)
+      .values({ name, config, createdAt: new Date(), updatedAt: new Date() })
+      .returning();
+    return result[0];
+  }
+  async deleteQuoteTemplate(id: number): Promise<boolean> {
+    const result = await db.delete(quoteTemplates).where(eq(quoteTemplates.id, id)).returning({ id: quoteTemplates.id });
     return result.length > 0;
   }
 

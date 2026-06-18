@@ -1,7 +1,18 @@
 import { PricingSetup, PricingProduct, PricingResults, CalculatedProduct } from '@/types/pricing';
 
 export const calculatePricing = (setup: PricingSetup, products: PricingProduct[]): PricingResults => {
-  const { totalCost, useBreakdown, expenses, useMargin, targetProfit, targetMargin } = setup;
+  const {
+    totalCost, useBreakdown, expenses, useMargin, targetProfit, targetMargin,
+    pmFeePercent, urgency, sustainabilityPremium, sustainabilityPremiumPct,
+  } = setup;
+
+  // Surcharge multipliers from Tshepiso framework
+  const rushSurchargeMap: Record<string, number> = { standard: 0, "48h": 15, "24h": 25, "same-day": 40 };
+  const rushSurcharge    = (rushSurchargeMap[urgency ?? "standard"] ?? 0) / 100;
+  const pmMultiplier     = (pmFeePercent ?? 0) / 100;
+  const esgMultiplier    = sustainabilityPremium ? (sustainabilityPremiumPct ?? 0) / 100 : 0;
+  // Combined uplift on top of base selling price
+  const priceUplift = 1 + rushSurcharge + pmMultiplier + esgMultiplier;
   
   const actualFixedCost = useBreakdown 
     ? expenses.reduce((sum, exp) => sum + exp.amount, 0)
@@ -60,13 +71,13 @@ export const calculatePricing = (setup: PricingSetup, products: PricingProduct[]
       const safeRevenuePercentage = (product.revenuePercentage || 0) / 100;
       const revenueShare = safeRevenuePercentage * totalRevenueValue;
       suggestedPrice = revenueShare / safeExpectedUnits;
-      suggestedPrice = Math.round(suggestedPrice * 100) / 100;
+      suggestedPrice = Math.round(suggestedPrice * priceUplift * 100) / 100;
 
       const productRevenue = suggestedPrice * safeExpectedUnits;
       const productVariableCost = safeCostPerUnit * safeExpectedUnits;
-      const productAllocatedFixedCost = (productRevenue / totalRevenueValue) * actualFixedCost;
+      const productAllocatedFixedCost = (productRevenue / (totalRevenueValue * priceUplift)) * actualFixedCost;
       const productProfit = productRevenue - productVariableCost - productAllocatedFixedCost;
-      
+
       totalRevenue = productRevenue;
       percentageRevenue = productRevenue > 0 ? (productProfit / productRevenue) * 100 : 0;
       suggestedProfitPerUnit = productProfit / safeExpectedUnits;
@@ -82,12 +93,13 @@ export const calculatePricing = (setup: PricingSetup, products: PricingProduct[]
       const profitPerUnitCalc = productProfitShare / safeExpectedUnits;
 
       suggestedProfitPerUnit = fixedCostPerUnit + profitPerUnitCalc;
-      suggestedPrice = safeCostPerUnit + fixedCostPerUnit + profitPerUnitCalc;
+      // Apply PM fee + rush + ESG uplift on top of base selling price
+      suggestedPrice = (safeCostPerUnit + fixedCostPerUnit + profitPerUnitCalc) * priceUplift;
       suggestedPrice = Math.round(suggestedPrice * 100) / 100;
 
       const productRevenue = suggestedPrice * safeExpectedUnits;
       const productTotalCost = (safeCostPerUnit * safeExpectedUnits) + productFixedCostShare;
-      
+
       totalRevenue = productRevenue;
       percentageRevenue = productRevenue > 0 ? ((productRevenue - productTotalCost) / productRevenue) * 100 : 0;
       profitPerUnit = suggestedPrice - safeCostPerUnit;

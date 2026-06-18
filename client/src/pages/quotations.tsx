@@ -16,8 +16,10 @@ import { Separator } from '@/components/ui/separator';
 
 import {
   ArrowLeft, Plus, Trash2, FileText, Download, Mail, Tag,
-  List, ReceiptText, SquarePen, Loader2, Settings, DollarSign
+  List, ReceiptText, SquarePen, Loader2, Settings, DollarSign,
+  AlertTriangle, Calculator,
 } from 'lucide-react';
+import { QuickPricerSheet, type PricedLineItem } from '@/components/pricing/quick-pricer-sheet';
 
 import logoUrl from './logo.png';
 
@@ -295,6 +297,32 @@ async function downloadInvoicePdf(invoiceId: number) {
   // Promotion / discount
   const [promo, setPromo] = useState<Promotion | undefined>(undefined);
 
+  // Pricing sheet
+  const [pricerOpen, setPricerOpen] = useState(false);
+
+  // Monthly overhead + profit target (from pricing config) — for coverage bar
+  const [monthlyOverhead,     setMonthlyOverhead]     = useState<number>(94_710);
+  const [monthlyProfitTarget, setMonthlyProfitTarget] = useState<number>(60_000);
+
+  const handlePricerConfirm = (item: PricedLineItem) => {
+    const qp: QuotedProduct = {
+      id: Date.now(),
+      originalId: Date.now(),
+      quoteId: `priced-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      name: item.name,
+      price: item.unitSell,
+      costPerUnit: item.unitCost,
+      expectedUnits: item.qty,
+      notes: item.notes,
+      quantity: item.qty,
+      sellingPrice: item.unitSell,
+    };
+    setQuotedProducts(prev => [...prev, qp]);
+    if (item.depositTip) {
+      toast({ title: `Deposit reminder (${item.clientType})`, description: item.depositTip });
+    }
+  };
+
   // Stored lists
   const [quotationsList, setQuotationsList] = useState<QuotationRecord[]>([]);
   const [invoicesList, setInvoicesList] = useState<InvoiceRecord[]>([]);
@@ -423,9 +451,25 @@ try {
 }
 
 
-      // local snapshot/products (unchanged)
-      const storedCompanyDetails = localStorage.getItem('companyDetails');
-      if (storedCompanyDetails) setCompanyDetails(JSON.parse(storedCompanyDetails));
+      // Company details — prefer DB, fall back to localStorage
+      try {
+        const cdRes = await fetch('/api/company-settings');
+        if (cdRes.ok) {
+          const cd = await cdRes.json();
+          if (cd && Object.keys(cd).length > 0) {
+            setCompanyDetails(prev => ({ ...prev, ...cd }));
+          } else {
+            const storedCompanyDetails = localStorage.getItem('companyDetails');
+            if (storedCompanyDetails) setCompanyDetails(JSON.parse(storedCompanyDetails));
+          }
+        } else {
+          const storedCompanyDetails = localStorage.getItem('companyDetails');
+          if (storedCompanyDetails) setCompanyDetails(JSON.parse(storedCompanyDetails));
+        }
+      } catch {
+        const storedCompanyDetails = localStorage.getItem('companyDetails');
+        if (storedCompanyDetails) setCompanyDetails(JSON.parse(storedCompanyDetails));
+      }
       const storedSnapshotId = localStorage.getItem('selectedQuotationSnapshotId');
       if (storedSnapshotId) setSelectedSnapshotId(storedSnapshotId);
       const storedProducts = localStorage.getItem('selectedQuotationProducts');
@@ -468,6 +512,17 @@ try {
         // ignore
       }
     })();
+  }, []);
+
+  // --- Load pricing config (for monthly overhead coverage bar)
+  useEffect(() => {
+    fetch('/api/quote-config', { headers: { Accept: 'application/json' } })
+      .then(r => r.ok ? r.json() : {})
+      .then((data: any) => {
+        if (data?.monthlyOverhead)     setMonthlyOverhead(Number(data.monthlyOverhead));
+        if (data?.monthlyProfitTarget) setMonthlyProfitTarget(Number(data.monthlyProfitTarget));
+      })
+      .catch(() => {});
   }, []);
 
   // --- Load bank accounts + sequences (fallback gracefully)
@@ -514,9 +569,23 @@ try {
     })();
   }, []);
 
-  // --- Persist lists + company details to localStorage
+  // --- Persist company details to DB (debounced) + localStorage fallback
+  const companyDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
+    // Always keep localStorage in sync as a fast fallback
     localStorage.setItem('companyDetails', JSON.stringify(companyDetails));
+    // Debounce DB save by 1.5s so we don't fire on every keystroke
+    if (companyDebounceRef.current) clearTimeout(companyDebounceRef.current);
+    companyDebounceRef.current = setTimeout(() => {
+      fetch('/api/company-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(companyDetails),
+      }).catch(() => {});
+    }, 1500);
+    return () => {
+      if (companyDebounceRef.current) clearTimeout(companyDebounceRef.current);
+    };
   }, [companyDetails]);
 
   useEffect(() => {
@@ -641,6 +710,7 @@ const saveQuotation = async () => {
   } catch {}
 
   const items = toQuotationItems(quotedProducts);
+  const t = totals();
 const payload = {
   header: {
     displayName,
@@ -652,7 +722,8 @@ const payload = {
     designCost,
     sampleCost,
     handlingCost,
-    promo, // server will stringify
+    grandTotal: t.grandTotal,
+    promo,
   },
   items,
 };
@@ -1296,37 +1367,36 @@ const convertToInvoice = async (quoteId: string) => {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Plus className="h-5 w-5" />
-              Add Products to Quote
+              Add Line Items
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            {availableProducts.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <FileText className="h-12 w-12 mx-auto mb-4 text-gray-400" />
-                <p>No products available. Please select a snapshot from the Pricing Calculator first.</p>
-                <Link href="/pricing-calculator">
-                  <Button className="mt-4">Go to Pricing Calculator</Button>
-                </Link>
-              </div>
-            ) : (
-              <div className="flex gap-4">
+          <CardContent className="space-y-4">
+            {/* Primary: price-aware add */}
+            <Button className="w-full sm:w-auto" onClick={() => setPricerOpen(true)}>
+              <Calculator className="h-4 w-4 mr-2" />
+              Price &amp; Add Item
+            </Button>
+
+            {/* Legacy: dropdown from snapshot (shown only if there are pre-loaded products) */}
+            {availableProducts.length > 0 && (
+              <div className="flex gap-4 pt-2 border-t">
                 <div className="flex-1">
                   <Select value={selectedProductId} onValueChange={setSelectedProductId}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select a product to add" />
+                      <SelectValue placeholder="Or pick from pre-loaded products…" />
                     </SelectTrigger>
                     <SelectContent>
                       {availableProducts.map(product => (
                         <SelectItem key={product.id} value={String(product.id)}>
-                          {product.name} — Suggested Price: R{product.price.toFixed(2)}
+                          {product.name} — R{product.price.toFixed(2)}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
-                <Button onClick={handleAddProduct} disabled={!selectedProductId}>
+                <Button variant="outline" onClick={handleAddProduct} disabled={!selectedProductId}>
                   <Plus className="h-4 w-4 mr-2" />
-                  Add Product
+                  Add
                 </Button>
               </div>
             )}
@@ -1338,60 +1408,87 @@ const convertToInvoice = async (quoteId: string) => {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <FileText className="h-5 w-5" />
-                Quoted Products
+                Quoted Items
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {quotedProducts.map(product => (
-                  <div key={product.quoteId} className="border rounded-lg p-4 bg-gray-50">
-                    <div className="flex justify-between items-start mb-3">
-                      <h4 className="font-semibold">{product.name}</h4>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => removeQuotedProduct(product.quoteId)}
-                        className="text-red-500 hover:text-red-700"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                    <div className="grid md:grid-cols-3 gap-4">
-                      <div className="space-y-2">
-                        <Label>Quantity</Label>
-                        <Input
-                          type="number"
-                          min="1"
-                          value={product.quantity}
-                          onChange={(e) => updateQuotedProduct(product.quoteId, 'quantity', parseInt(e.target.value, 10) || 1)}
-                        />
+                {quotedProducts.map(product => {
+                  const belowCost = product.costPerUnit > 0 && product.sellingPrice < product.costPerUnit;
+                  return (
+                    <div key={product.quoteId} className={`border rounded-lg p-4 ${belowCost ? 'bg-red-50 border-red-200' : 'bg-gray-50'}`}>
+                      <div className="flex justify-between items-start mb-3">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="font-semibold">{product.name}</h4>
+                          {belowCost && (
+                            <span className="inline-flex items-center gap-1 text-xs text-red-600 bg-red-100 border border-red-200 rounded px-1.5 py-0.5">
+                              <AlertTriangle className="w-3 h-3" /> Below cost
+                            </span>
+                          )}
+                          {product.notes && (
+                            <span className="text-xs text-gray-500">{product.notes}</span>
+                          )}
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeQuotedProduct(product.quoteId)}
+                          className="text-red-500 hover:text-red-700"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       </div>
-                      <div className="space-y-2">
-                        <Label>Unit Price</Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={product.sellingPrice}
-                          onChange={(e) => updateQuotedProduct(product.quoteId, 'sellingPrice', parseFloat(e.target.value) || 0)}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Line Total</Label>
-                        <div className="p-2 bg-amber-100 rounded text-amber-800 font-semibold">
-                          R{calculateLineTotal(product).toFixed(2)}
+                      <div className="grid md:grid-cols-3 gap-4">
+                        <div className="space-y-2">
+                          <Label>Quantity</Label>
+                          <Input
+                            type="number"
+                            min="1"
+                            value={product.quantity}
+                            onChange={(e) => updateQuotedProduct(product.quoteId, 'quantity', parseInt(e.target.value, 10) || 1)}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Unit Price (R)</Label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            value={product.sellingPrice}
+                            onChange={(e) => updateQuotedProduct(product.quoteId, 'sellingPrice', parseFloat(e.target.value) || 0)}
+                            className={belowCost ? 'border-red-400' : ''}
+                          />
+                          {product.costPerUnit > 0 && (
+                            <p className="text-xs text-muted-foreground">Cost: R{product.costPerUnit.toFixed(2)}/unit</p>
+                          )}
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Line Total</Label>
+                          <div className={`p-2 rounded font-semibold ${belowCost ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}`}>
+                            R{calculateLineTotal(product).toFixed(2)}
+                          </div>
                         </div>
                       </div>
+                      {belowCost && (
+                        <div className="mt-2 flex items-start gap-2 text-red-600 text-sm">
+                          <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                          <span>
+                            You're losing <strong>R{(product.costPerUnit - product.sellingPrice).toFixed(2)} per unit</strong>
+                            {product.quantity > 1 ? ` (R${((product.costPerUnit - product.sellingPrice) * product.quantity).toFixed(2)} total on this line)` : ''}.
+                            Raise the price to at least R{product.costPerUnit.toFixed(2)}.
+                          </span>
+                        </div>
+                      )}
+                      <div className="mt-2">
+                        <Label>Notes</Label>
+                        <Input
+                          value={product.notes || ''}
+                          onChange={(e) => updateQuotedProduct(product.quoteId, 'notes', e.target.value)}
+                          placeholder="e.g., Size, Colour, Specific requirements"
+                        />
+                      </div>
                     </div>
-                    <div className="mt-2">
-                      <Label>Product Notes</Label>
-                      <Input
-                        value={product.notes || ''}
-                        onChange={(e) => updateQuotedProduct(product.quoteId, 'notes', e.target.value)}
-                        placeholder="e.g., Size, Color, Specific requirements"
-                      />
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </CardContent>
           </Card>
@@ -1520,34 +1617,30 @@ const convertToInvoice = async (quoteId: string) => {
               Invoice Items
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            {availableProducts.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <FileText className="h-12 w-12 mx-auto mb-4 text-gray-400" />
-                <p>No products available. Please select a snapshot from the Pricing Calculator first.</p>
-                <Link href="/pricing-calculator">
-                  <Button className="mt-4">Go to Pricing Calculator</Button>
-                </Link>
-              </div>
-            ) : (
-              <div className="flex gap-4">
+          <CardContent className="space-y-4">
+            <Button className="w-full sm:w-auto" onClick={() => setPricerOpen(true)}>
+              <Calculator className="h-4 w-4 mr-2" />
+              Price &amp; Add Item
+            </Button>
+            {availableProducts.length > 0 && (
+              <div className="flex gap-4 pt-2 border-t">
                 <div className="flex-1">
                   <Select value={selectedProductId} onValueChange={setSelectedProductId}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select a product to add" />
+                      <SelectValue placeholder="Or pick from pre-loaded products…" />
                     </SelectTrigger>
                     <SelectContent>
                       {availableProducts.map(product => (
                         <SelectItem key={product.id} value={String(product.id)}>
-                          {product.name} — Suggested Price: R{product.price.toFixed(2)}
+                          {product.name} — R{product.price.toFixed(2)}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
-                <Button onClick={handleAddProduct} disabled={!selectedProductId}>
+                <Button variant="outline" onClick={handleAddProduct} disabled={!selectedProductId}>
                   <Plus className="h-4 w-4 mr-2" />
-                  Add Product
+                  Add
                 </Button>
               </div>
             )}
@@ -1559,60 +1652,83 @@ const convertToInvoice = async (quoteId: string) => {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <FileText className="h-5 w-5" />
-                Invoice Products
+                Invoice Items
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {quotedProducts.map(product => (
-                  <div key={product.quoteId} className="border rounded-lg p-4 bg-gray-50">
-                    <div className="flex justify-between items-start mb-3">
-                      <h4 className="font-semibold">{product.name}</h4>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => removeQuotedProduct(product.quoteId)}
-                        className="text-red-500 hover:text-red-700"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                    <div className="grid md:grid-cols-3 gap-4">
-                      <div className="space-y-2">
-                        <Label>Quantity</Label>
-                        <Input
-                          type="number"
-                          min="1"
-                          value={product.quantity}
-                          onChange={(e) => updateQuotedProduct(product.quoteId, 'quantity', parseInt(e.target.value, 10) || 1)}
-                        />
+                {quotedProducts.map(product => {
+                  const belowCost = product.costPerUnit > 0 && product.sellingPrice < product.costPerUnit;
+                  return (
+                    <div key={product.quoteId} className={`border rounded-lg p-4 ${belowCost ? 'bg-red-50 border-red-200' : 'bg-gray-50'}`}>
+                      <div className="flex justify-between items-start mb-3">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="font-semibold">{product.name}</h4>
+                          {belowCost && (
+                            <span className="inline-flex items-center gap-1 text-xs text-red-600 bg-red-100 border border-red-200 rounded px-1.5 py-0.5">
+                              <AlertTriangle className="w-3 h-3" /> Below cost
+                            </span>
+                          )}
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeQuotedProduct(product.quoteId)}
+                          className="text-red-500 hover:text-red-700"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       </div>
-                      <div className="space-y-2">
-                        <Label>Unit Price</Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={product.sellingPrice}
-                          onChange={(e) => updateQuotedProduct(product.quoteId, 'sellingPrice', parseFloat(e.target.value) || 0)}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Line Total</Label>
-                        <div className="p-2 bg-amber-100 rounded text-amber-800 font-semibold">
-                          R{calculateLineTotal(product).toFixed(2)}
+                      <div className="grid md:grid-cols-3 gap-4">
+                        <div className="space-y-2">
+                          <Label>Quantity</Label>
+                          <Input
+                            type="number"
+                            min="1"
+                            value={product.quantity}
+                            onChange={(e) => updateQuotedProduct(product.quoteId, 'quantity', parseInt(e.target.value, 10) || 1)}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Unit Price (R)</Label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            value={product.sellingPrice}
+                            onChange={(e) => updateQuotedProduct(product.quoteId, 'sellingPrice', parseFloat(e.target.value) || 0)}
+                            className={belowCost ? 'border-red-400' : ''}
+                          />
+                          {product.costPerUnit > 0 && (
+                            <p className="text-xs text-muted-foreground">Cost: R{product.costPerUnit.toFixed(2)}/unit</p>
+                          )}
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Line Total</Label>
+                          <div className={`p-2 rounded font-semibold ${belowCost ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}`}>
+                            R{calculateLineTotal(product).toFixed(2)}
+                          </div>
                         </div>
                       </div>
+                      {belowCost && (
+                        <div className="mt-2 flex items-start gap-2 text-red-600 text-sm">
+                          <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                          <span>
+                            Losing <strong>R{(product.costPerUnit - product.sellingPrice).toFixed(2)}/unit</strong>
+                            {product.quantity > 1 ? ` — R${((product.costPerUnit - product.sellingPrice) * product.quantity).toFixed(2)} on this line` : ''}.
+                          </span>
+                        </div>
+                      )}
+                      <div className="mt-2">
+                        <Label>Notes</Label>
+                        <Input
+                          value={product.notes || ''}
+                          onChange={(e) => updateQuotedProduct(product.quoteId, 'notes', e.target.value)}
+                          placeholder="e.g., Size, Colour, Specific requirements"
+                        />
+                      </div>
                     </div>
-                    <div className="mt-2">
-                      <Label>Product Notes</Label>
-                      <Input
-                        value={product.notes || ''}
-                        onChange={(e) => updateQuotedProduct(product.quoteId, 'notes', e.target.value)}
-                        placeholder="e.g., Size, Color, Specific requirements"
-                      />
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </CardContent>
           </Card>
@@ -1699,7 +1815,101 @@ const convertToInvoice = async (quoteId: string) => {
 
   // ---------- LISTS ----------
 
-  const renderQuotationList = () => (
+  const renderQuotationList = () => {
+    // ── Month coverage calculations ──────────────────────────────────
+    const nowYM = new Date().toISOString().slice(0, 7); // "YYYY-MM"
+
+    const thisMonth = quotationsList.filter(q => {
+      const d = q.quoteDate || q.createdAt || '';
+      return String(d).slice(0, 7) === nowYM;
+    });
+
+    const confirmed = thisMonth.filter(q =>
+      q.status === 'accepted' || q.status === 'converted_to_invoice'
+    );
+    const pipeline = thisMonth.filter(q =>
+      q.status === 'draft' || q.status === 'sent'
+    );
+
+    const confirmedRevVAT = confirmed.reduce((s, q) => s + Number(q.grandTotal || 0), 0);
+    const pipelineRevVAT  = pipeline.reduce((s, q) => s + Number(q.grandTotal || 0), 0);
+
+    // Strip VAT (15%) to get ex-VAT revenue — this is what actually covers overhead
+    const confirmedExVAT = confirmedRevVAT / 1.15;
+    const pipelineExVAT  = pipelineRevVAT  / 1.15;
+    const totalExVAT     = confirmedExVAT + pipelineExVAT;
+
+    // Full target = overhead + profit target (R94,710 + R60,000 = R154,710)
+    const totalTarget  = monthlyOverhead + monthlyProfitTarget;
+    const confirmedPct = totalTarget > 0 ? Math.min((confirmedExVAT / totalTarget) * 100, 100) : 0;
+    const totalPct     = totalTarget > 0 ? Math.min((totalExVAT     / totalTarget) * 100, 100) : 0;
+    const gap          = Math.max(totalTarget - totalExVAT, 0);
+
+    const barColor = confirmedPct >= 100
+      ? 'bg-green-500'
+      : confirmedPct >= 60
+      ? 'bg-amber-500'
+      : 'bg-red-500';
+
+    return (
+    <>
+    {/* ── Monthly overhead coverage panel ──────────────────────────── */}
+    <Card className="mb-4 border-amber-200 bg-amber-50">
+      <CardContent className="pt-4 pb-3">
+        <div className="flex items-start justify-between gap-4 flex-wrap mb-3">
+          <div>
+            <p className="text-sm font-semibold text-amber-900">
+              {new Date().toLocaleString('en-ZA', { month: 'long', year: 'numeric' })} — Overhead Coverage
+            </p>
+            <p className="text-xs text-amber-700 mt-0.5">
+              Target: <strong>R {totalTarget.toLocaleString('en-ZA')}</strong>
+              <span className="text-amber-600"> (R {monthlyOverhead.toLocaleString('en-ZA')} overhead + R {monthlyProfitTarget.toLocaleString('en-ZA')} profit)</span>
+            </p>
+          </div>
+          <div className="text-right text-xs text-amber-800 space-y-0.5">
+            <div>Confirmed (accepted): <strong>R {confirmedExVAT.toLocaleString('en-ZA', { maximumFractionDigits: 0 })}</strong> ex-VAT</div>
+            <div>In pipeline (sent/draft): <strong>R {pipelineExVAT.toLocaleString('en-ZA', { maximumFractionDigits: 0 })}</strong> ex-VAT</div>
+          </div>
+        </div>
+
+        {/* Progress bar: confirmed (solid) + pipeline (striped) */}
+        <div className="relative h-4 rounded-full bg-gray-200 overflow-hidden">
+          {/* pipeline portion */}
+          {totalPct > confirmedPct && (
+            <div
+              className="absolute top-0 left-0 h-full bg-amber-300 opacity-60"
+              style={{ width: `${totalPct}%` }}
+            />
+          )}
+          {/* confirmed portion */}
+          <div
+            className={`absolute top-0 left-0 h-full ${barColor} transition-all`}
+            style={{ width: `${confirmedPct}%` }}
+          />
+        </div>
+
+        <div className="flex justify-between text-xs mt-1.5">
+          <span className={confirmedPct >= 100 ? 'text-green-700 font-semibold' : 'text-amber-800'}>
+            {confirmedPct.toFixed(0)}% confirmed
+          </span>
+          {gap > 0 ? (
+            <span className="text-red-700 font-medium">
+              Still need R {gap.toLocaleString('en-ZA', { maximumFractionDigits: 0 })} ex-VAT to hit target
+            </span>
+          ) : (
+            <span className="text-green-700 font-semibold">Overhead &amp; profit target covered this month!</span>
+          )}
+        </div>
+
+        {thisMonth.length === 0 && (
+          <p className="text-xs text-amber-700 mt-2 text-center">No quotations dated this month yet.</p>
+        )}
+        <p className="text-xs text-amber-600 mt-2">
+          Revenue shown is ex-VAT. Target = R {monthlyOverhead.toLocaleString('en-ZA')} overhead + R {monthlyProfitTarget.toLocaleString('en-ZA')} profit. Only quotations dated in {new Date().toLocaleString('en-ZA', { month: 'long' })} are counted.
+        </p>
+      </CardContent>
+    </Card>
+
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
@@ -1792,7 +2002,9 @@ const convertToInvoice = async (quoteId: string) => {
         )}
       </CardContent>
     </Card>
-  );
+    </>
+    );
+  };
 
   const renderInvoiceList = () => (
     <Card>
@@ -2173,6 +2385,13 @@ const convertToInvoice = async (quoteId: string) => {
           {currentView === 'edit-banking' && renderSettings()}
         </div>
       </div>
+
+      {/* Pricing calculator sheet — shared between quote and invoice forms */}
+      <QuickPricerSheet
+        open={pricerOpen}
+        onOpenChange={setPricerOpen}
+        onConfirm={handlePricerConfirm}
+      />
     </div>
   );
 }

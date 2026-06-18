@@ -2,7 +2,7 @@
 
 // --- Updated to match tbs.expenses ---
 export interface PricingExpense {
-  id: number; // serial4 in DB, so number
+  id: number | string; // serial4 in DB (number) or temp local id (string)
   snapshotId?: number | null; // int4 NULL in DB, so number | null
   label: string; // varchar(255) NOT NULL in DB
   amount: number; // numeric NOT NULL in DB
@@ -10,22 +10,34 @@ export interface PricingExpense {
 
 // --- Updated to match tbs.products (renamed to snapshotProducts in Drizzle schema) ---
 export interface PricingProduct { // This type now specifically represents products associated with a snapshot
-  id: number; // serial4 NOT NULL in DB
+  id: number | string; // serial4 in DB (number) or temp local id (string)
   snapshotId?: number | null; // int4 NULL in DB
   name: string; // varchar(255) NOT NULL in DB
   revenuePercentage: number; // numeric NOT NULL in DB
   expectedUnits: number; // int4 NOT NULL in DB
   costPerUnit?: number | null; // numeric NULL in DB
   // These fields are NOT stored in tbs.products, they are calculated or part of master_products
-  // Add calculated fields if needed for frontend display, but they are not persisted here
   price?: number;
   totalRevenue?: number;
   profitPerUnit?: number;
   profitMargin?: number;
-  // Added for consistency with `calculatePricing` and `handleLoadSnapshot`
-  calculationMethod?: 'cost-plus' | 'value-based' | 'competitive' | 'dynamic';
-  // NEW: Field to hold a suggested price from a calculation, separate from the manual price input
+  calculationMethod?: 'cost-plus' | 'percentage' | 'value-based' | 'competitive' | 'dynamic';
   suggestedPrice?: number;
+  // Tshepiso Branding Solutions product fields
+  category?: string;
+  isInHouse?: boolean;
+  brandingCost?: number;
+  transportCost?: number;
+  installationCost?: number;
+  // Supplier / catalog fields
+  bestSupplier?: string;
+  sku?: string;
+  unit?: string;
+  // Additional product metadata
+  minQuantity?: number;
+  maxQuantity?: number;
+  notes?: string;
+  directCosts?: unknown[];
 }
 
 // --- New type for master_products (if you use it on the frontend) ---
@@ -46,6 +58,13 @@ export interface PricingSetup {
   useMargin: boolean;
   targetProfit: number;
   targetMargin: number;
+  // Tshepiso Branding Solutions pricing framework fields
+  clientType?: 'corporate' | 'government' | 'retail' | 'smme' | 'reseller';
+  jobSize?: 'small' | 'medium' | 'large' | 'events';
+  urgency?: 'standard' | '48h' | '24h' | 'same-day';
+  sustainabilityPremium?: boolean;
+  sustainabilityPremiumPct?: number;
+  pmFeePercent?: number;
 }
 
 export interface CalculatedProduct extends PricingProduct {
@@ -108,6 +127,7 @@ export type FinancialSubTab = 'transactions' | 'import' | 'financials-reports';
 
 // Corrected PricingTab to include all tabs, including the new financial-management parent tab
 export type PricingTab =
+  | 'quote-builder'
   | 'setup'
   | 'products'
   | 'results'
@@ -120,10 +140,24 @@ export type PricingTab =
   | 'financial-management'
   | 'tenders'
   | 'dashboard'
-  | "suppliers";
+  | 'suppliers';
   
+export interface Tender {
+  id: number;
+  name: string;
+  description?: string | null;
+  status?: string | null;
+  createdAt?: string | null;
+  items?: TenderItem[] | string;
+  pricingMode?: 'margin' | 'targetProfit';
+  targetMarginPct?: number;
+  targetProfitAbsolute?: number;
+  [key: string]: unknown;
+}
+
 // Tender-related types
 export interface SupplierRow {
+  id?: string;
   supplierName: string;
   sku?: string;
   productName?: string;
@@ -139,6 +173,7 @@ export interface TenderPricingState {
   pricingMode: 'margin' | 'targetProfit';
   targetMarginPct: number;    // e.g., 25 means 25%
   targetProfitAbsolute: number; // currency
+  catalogsBySupplier?: Record<string, CatalogItem[]>;
 }
 
 

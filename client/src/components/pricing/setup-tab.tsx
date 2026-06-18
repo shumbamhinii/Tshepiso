@@ -26,6 +26,11 @@ import {
   Copy,
   ChevronsUpDown,
   Check,
+  Users,
+  Zap,
+  Leaf,
+  AlertTriangle,
+  RefreshCw,
 } from "lucide-react";
 
 import type { PricingSetup, PricingExpense, PricingProduct } from "@/types/pricing";
@@ -48,6 +53,81 @@ const money = (input: any) => {
   return Number.isFinite(n) ? (neg ? -n : n) : NaN;
 };
 const cn = (...xs: Array<string | false | null | undefined>) => xs.filter(Boolean).join(" ");
+
+/* ===========================================================
+   Tshepiso Branding Solutions – Pricing Framework Constants
+   =========================================================== */
+const TSHEPISO_OVERHEADS = [
+  { label: "Accounting Fees",       amount: 2300 },
+  { label: "Bank Fees",             amount: 1000 },
+  { label: "Bursaries",             amount: 6620 },
+  { label: "Computer Expenses",     amount: 4000 },
+  { label: "Donations",             amount: 250 },
+  { label: "Electricity & Water",   amount: 1400 },
+  { label: "Director Salary",       amount: 15000 },
+  { label: "Staff Salary 1",        amount: 4500 },
+  { label: "Staff Salary 2",        amount: 6500 },
+  { label: "PAYE",                  amount: 4000 },
+  { label: "UIF",                   amount: 300 },
+  { label: "Insurance",             amount: 5522.80 },
+  { label: "Interest Expense",      amount: 2000 },
+  { label: "Meals & Entertainment", amount: 1000 },
+  { label: "Tracker",               amount: 300 },
+  { label: "Fuel & Vehicle Expenses", amount: 10000 },
+  { label: "Office Expenses",       amount: 2000 },
+  { label: "Printing & Stationery", amount: 1000 },
+  { label: "Rent",                  amount: 10500 },
+  { label: "Stipends",              amount: 1000 },
+  { label: "Subscriptions",         amount: 1060 },
+  { label: "Telephone & Internet",  amount: 2472.94 },
+  { label: "Rental Debt/Interest",  amount: 9000 },
+  { label: "Xero",                  amount: 984.75 },
+  { label: "Domains",               amount: 3000 },
+];
+
+const CLIENT_TYPE_CONFIG = {
+  corporate:  { label: "Corporate",      minGP: 35, maxGP: 50, deposit: "Negotiable",  minGPLabel: "35%" },
+  government: { label: "Government/SOE", minGP: 25, maxGP: 40, deposit: "PO Required", minGPLabel: "25%" },
+  retail:     { label: "Retail",         minGP: 30, maxGP: 45, deposit: "50% upfront",  minGPLabel: "30%" },
+  smme:       { label: "SMME",           minGP: 45, maxGP: 65, deposit: "70% upfront",  minGPLabel: "45%" },
+  reseller:   { label: "Reseller",       minGP: 15, maxGP: 30, deposit: "70% upfront",  minGPLabel: "15%" },
+} as const;
+
+const JOB_SIZE_CONFIG = {
+  small:  { label: "Small Job",           pmMin: 5,  pmMax: 8  },
+  medium: { label: "Medium Job",          pmMin: 8,  pmMax: 12 },
+  large:  { label: "Large Complex Job",   pmMin: 12, pmMax: 18 },
+  events: { label: "Events/Activations",  pmMin: 15, pmMax: 20 },
+} as const;
+
+const URGENCY_CONFIG = {
+  standard:    { label: "Standard (3–5 days)",  surcharge: 0  },
+  "48h":       { label: "48 Hours (+15%)",       surcharge: 15 },
+  "24h":       { label: "24 Hours (+25%)",       surcharge: 25 },
+  "same-day":  { label: "Same Day (+40%)",       surcharge: 40 },
+} as const;
+
+const PRODUCT_CATEGORIES = [
+  { value: "corporate-clothing",      label: "Corporate Clothing",               minGP: 35, maxGP: 50,  moq: "10 units or R1,000" },
+  { value: "promotional-gifts",       label: "Promotional Gifts",                minGP: 40, maxGP: 60,  moq: "R1,500 minimum" },
+  { value: "large-format-inhouse",    label: "Large Format Printing (In-House)", minGP: 45, maxGP: 65,  moq: "Min print value" },
+  { value: "large-format-outsourced", label: "Large Format Printing (Outsourced)", minGP: 40, maxGP: 55, moq: "Min print value" },
+  { value: "signage",                 label: "Signage",                          minGP: 40, maxGP: 55,  moq: "" },
+  { value: "eco-products",            label: "Eco Products",                     minGP: 50, maxGP: 80,  moq: "" },
+  { value: "paper-bags",              label: "Paper Bags",                       minGP: 45, maxGP: 70,  moq: "500 units" },
+  { value: "felt-bags",               label: "Felt Bags",                        minGP: 55, maxGP: 85,  moq: "20 units" },
+  { value: "branding-design",         label: "Branding & Design Services",       minGP: 60, maxGP: 80,  moq: "" },
+  { value: "event-branding",          label: "Event Branding",                   minGP: 45, maxGP: 65,  moq: "Min project fee" },
+  { value: "laser-engraving",         label: "Laser Engraving",                  minGP: 55, maxGP: 75,  moq: "Min order value" },
+  { value: "paper-printing",          label: "Paper Printing (Outsourced)",      minGP: 35, maxGP: 50,  moq: "250 units" },
+  { value: "expo-stands",             label: "Expo Stands",                      minGP: 35, maxGP: 50,  moq: "Min project fee" },
+  { value: "government-tender",       label: "Government Tender",                minGP: 25, maxGP: 40,  moq: "" },
+  { value: "other",                   label: "Other",                            minGP: 35, maxGP: 50,  moq: "" },
+];
+
+type ClientTypeKey = keyof typeof CLIENT_TYPE_CONFIG;
+type JobSizeKey    = keyof typeof JOB_SIZE_CONFIG;
+type UrgencyKey    = keyof typeof URGENCY_CONFIG;
 
 /* ===========================================================
    Supplier types (for picker)
@@ -416,12 +496,21 @@ function CustomItemDialog({
             <Select value={category} onValueChange={setCategory}>
               <SelectTrigger className="h-9 mt-1"><SelectValue placeholder="-" /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="packaging">Packaging</SelectItem>
-                <SelectItem value="stationery">Stationery</SelectItem>
-                <SelectItem value="services">Services</SelectItem>
-                <SelectItem value="other">Other</SelectItem>
+                {PRODUCT_CATEGORIES.map((c) => (
+                  <SelectItem key={c.value} value={c.value}>
+                    {c.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
+            {category && (() => {
+              const cat = PRODUCT_CATEGORIES.find(c => c.value === category);
+              return cat ? (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Target GP: {cat.minGP}%–{cat.maxGP}%{cat.moq ? ` · MOQ: ${cat.moq}` : ""}
+                </div>
+              ) : null;
+            })()}
           </div>
 
           <div className="md:col-span-2">
@@ -491,9 +580,9 @@ export default function SetupTab({
     const newExpense: PricingExpense = { id: Date.now().toString(), label: "", amount: 0 };
     onSetupChange({ ...setup, expenses: [...setup.expenses, newExpense] });
   };
-  const removeExpense = (id: string) =>
+  const removeExpense = (id: string | number) =>
     onSetupChange({ ...setup, expenses: setup.expenses.filter((x) => x.id !== id) });
-  const updateExpense = (id: string, field: keyof PricingExpense, value: string | number) =>
+  const updateExpense = (id: string | number, field: keyof PricingExpense, value: string | number) =>
     onSetupChange({
       ...setup,
       expenses: setup.expenses.map((e) =>
@@ -502,6 +591,24 @@ export default function SetupTab({
     });
 
   const totalCalculatedCost = setup.expenses.reduce((sum, exp) => sum + (parseFloat(exp.amount as any) || 0), 0);
+
+  // ---- Tshepiso framework derived values ----
+  const clientType = setup.clientType as ClientTypeKey | undefined;
+  const jobSize    = setup.jobSize    as JobSizeKey    | undefined;
+  const urgency    = (setup.urgency || "standard") as UrgencyKey;
+  const sustainabilityPremium    = setup.sustainabilityPremium    ?? false;
+  const sustainabilityPremiumPct = setup.sustainabilityPremiumPct ?? 15;
+  const pmFeePercent             = setup.pmFeePercent;
+
+  const loadOverheadDefaults = () => {
+    const defaultExpenses: PricingExpense[] = TSHEPISO_OVERHEADS.map((o, i) => ({
+      id: `default-${i}-${Date.now()}` as any,
+      label: o.label,
+      amount: o.amount,
+    }));
+    onSetupChange({ ...setup, useBreakdown: true, expenses: defaultExpenses });
+    setCostMethod("breakdown");
+  };
 
   // ---- products state (moved from ProductsTab) ----
   const supplierNames = useSupplierNames();
@@ -602,8 +709,8 @@ export default function SetupTab({
       <div className="bg-card border-b border-border px-8 py-6">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-2xl font-bold text-card-foreground">Setup Configuration</h2>
-            <p className="text-muted-foreground mt-1">Configure your base costs, profit target and products.</p>
+            <h2 className="text-2xl font-bold text-card-foreground">My Business Costs</h2>
+            <p className="text-muted-foreground mt-1">Enter your monthly expenses and profit goal. You only need to set this up once.</p>
           </div>
           <div className="flex items-center space-x-3">
             <Button variant="ghost" size="sm">
@@ -631,13 +738,32 @@ export default function SetupTab({
       <div className="p-8">
         <div className="max-w-6xl mx-auto space-y-8">
 
+          {/* Business Targets KPI Banner */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: "What your business costs each month", value: `R ${(setup.useBreakdown ? totalCalculatedCost : setup.totalCost || 0).toLocaleString("en-ZA", { maximumFractionDigits: 0 })}`, sub: "monthly overheads" },
+              { label: "Profit you want to make", value: setup.useMargin ? `${setup.targetMargin || 0}%` : `R ${(setup.targetProfit || 0).toLocaleString("en-ZA", { maximumFractionDigits: 0 })}`, sub: setup.useMargin ? "of every rand earned" : "per month" },
+              { label: "Total you need to earn", value: `R ${Math.round((setup.useBreakdown ? totalCalculatedCost : setup.totalCost || 0) + (setup.useMargin ? 0 : setup.targetProfit || 0)).toLocaleString("en-ZA")}`, sub: "per month (min)" },
+              { label: "Per job goal", value: `R ${Math.round(((setup.useBreakdown ? totalCalculatedCost : setup.totalCost || 0) + (setup.useMargin ? 0 : setup.targetProfit || 0)) / 10).toLocaleString("en-ZA")}`, sub: "if you do 10 jobs/month" },
+            ].map(({ label, value, sub }) => (
+              <div key={label} className="bg-primary/5 border border-primary/20 rounded-lg p-3 text-center">
+                <div className="text-lg font-bold text-primary">{value}</div>
+                <div className="text-xs font-medium text-foreground/70 mt-0.5">{label}</div>
+                <div className="text-[10px] text-muted-foreground">{sub}</div>
+              </div>
+            ))}
+          </div>
+
           {/* Cost Configuration */}
           <Card className="pricing-form-section">
             <CardHeader>
               <CardTitle className="flex items-center text-lg">
                 <Coins className="w-5 h-5 mr-3 text-primary" />
-                Cost Configuration
+                Step 1 — What does your business cost to run each month?
               </CardTitle>
+              <CardDescription>
+                These are costs you pay every month whether you have clients or not — rent, salaries, insurance, etc.
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <RadioGroup
@@ -652,15 +778,15 @@ export default function SetupTab({
                   <div className="p-4 bg-muted rounded-lg">
                     <div className="flex items-center space-x-3">
                       <RadioGroupItem value="simple" id="simple" />
-                      <Label htmlFor="simple" className="font-medium">Simple Total Cost</Label>
+                      <Label htmlFor="simple" className="font-medium">I know the total — just let me enter one number</Label>
                     </div>
                     <p className="text-sm text-muted-foreground mt-1 ml-6">
-                      Enter your total fixed costs as a single amount
+                      Quick option if you already know your total monthly costs
                     </p>
 
                     {costMethod === "simple" && (
                       <div className="mt-4 ml-6">
-                        <Label htmlFor="totalCost" className="text-sm font-medium">Total Fixed Costs</Label>
+                        <Label htmlFor="totalCost" className="text-sm font-medium">Total monthly business costs (R)</Label>
                         <div className="relative mt-2">
                           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">R</span>
                           <Input
@@ -681,10 +807,10 @@ export default function SetupTab({
                   <div className="p-4 bg-muted rounded-lg">
                     <div className="flex items-center space-x-3">
                       <RadioGroupItem value="breakdown" id="breakdown" />
-                      <Label htmlFor="breakdown" className="font-medium">Detailed Cost Breakdown</Label>
+                      <Label htmlFor="breakdown" className="font-medium">I want to list every expense separately</Label>
                     </div>
                     <p className="text-sm text-muted-foreground mt-1 ml-6">
-                      Break down your costs into individual expense categories
+                      Recommended — shows you exactly where your money goes
                     </p>
 
                     {costMethod === "breakdown" && (
@@ -716,13 +842,24 @@ export default function SetupTab({
                           ))}
                         </div>
 
-                        <Button variant="ghost" size="sm" onClick={addExpense} className="mt-3 text-primary hover:text-primary">
-                          <Plus className="w-4 h-4 mr-2" /> Add Expense Category
-                        </Button>
+                        <div className="flex flex-wrap gap-2 mt-3">
+                          <Button variant="ghost" size="sm" onClick={addExpense} className="text-primary hover:text-primary">
+                            <Plus className="w-4 h-4 mr-2" /> Add another expense
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={loadOverheadDefaults}
+                            className="border-primary/50 text-primary hover:bg-primary/10"
+                          >
+                            <RefreshCw className="w-4 h-4 mr-2" />
+                            Load our standard expenses (pre-filled)
+                          </Button>
+                        </div>
 
                         <div className="mt-4 p-3 bg-accent/10 rounded-lg">
                           <div className="flex justify-between items-center">
-                            <span className="font-medium">Total Fixed Costs:</span>
+                            <span className="font-medium">Your total monthly business costs:</span>
                             <Badge variant="secondary" className="text-lg font-bold">R{(totalCalculatedCost ?? 0).toFixed(2)}</Badge>
                           </div>
                         </div>
@@ -739,8 +876,11 @@ export default function SetupTab({
             <CardHeader>
               <CardTitle className="flex items-center text-lg">
                 <Target className="w-5 h-5 mr-3 text-primary" />
-                Profit Target Configuration
+                Step 2 — How much profit do you want to make?
               </CardTitle>
+              <CardDescription>
+                This is money left over after paying all your bills. It's what grows your business.
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <RadioGroup
@@ -755,13 +895,13 @@ export default function SetupTab({
                   <div className="p-4 bg-muted rounded-lg">
                     <div className="flex items-center space-x-3">
                       <RadioGroupItem value="fixed" id="fixed" />
-                      <Label htmlFor="fixed" className="font-medium">Fixed Profit Amount</Label>
+                      <Label htmlFor="fixed" className="font-medium">A specific rand amount per month</Label>
                     </div>
-                    <p className="text-sm text-muted-foreground mt-1 ml-6">Set a specific Rand amount for your target profit</p>
+                    <p className="text-sm text-muted-foreground mt-1 ml-6">e.g. I want to make R60,000 profit each month</p>
 
                     {profitMethod === "fixed" && (
                       <div className="mt-4 ml-6">
-                        <Label htmlFor="targetProfit" className="text-sm font-medium">Target Profit</Label>
+                        <Label htmlFor="targetProfit" className="text-sm font-medium">Monthly profit goal (R)</Label>
                         <div className="relative mt-2">
                           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">R</span>
                           <Input
@@ -782,13 +922,13 @@ export default function SetupTab({
                   <div className="p-4 bg-muted rounded-lg">
                     <div className="flex items-center space-x-3">
                       <RadioGroupItem value="margin" id="margin" />
-                      <Label htmlFor="margin" className="font-medium">Profit Margin Percentage</Label>
+                      <Label htmlFor="margin" className="font-medium">A percentage of everything I earn</Label>
                     </div>
-                    <p className="text-sm text-muted-foreground mt-1 ml-6">Set your target profit as a percentage of total revenue</p>
+                    <p className="text-sm text-muted-foreground mt-1 ml-6">e.g. keep 30% of every rand I invoice as profit</p>
 
                     {profitMethod === "margin" && (
                       <div className="mt-4 ml-6">
-                        <Label htmlFor="targetMargin" className="text-sm font-medium">Target Margin</Label>
+                        <Label htmlFor="targetMargin" className="text-sm font-medium">What % of sales should be profit?</Label>
                         <div className="relative mt-2">
                           <Input
                             id="targetMargin"
@@ -801,7 +941,7 @@ export default function SetupTab({
                           />
                           <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">%</span>
                         </div>
-                        <p className="text-xs text-muted-foreground mt-1">Common margins: 20-30% for retail, 40-60% for services</p>
+                        <p className="text-xs text-muted-foreground mt-1">If you charge R100, and want 30% margin, R30 is your profit.</p>
                       </div>
                     )}
                   </div>
@@ -876,7 +1016,7 @@ export default function SetupTab({
                         <th className="px-3 py-2 w-[56px]">#</th>
                         <th className="px-3 py-2 min-w-[260px]">Product</th>
                         <th className="px-3 py-2 w-[150px]">Supplier</th>
-                        <th className="px-3 py-2 w-[180px]">Cost (R)</th> {/* Increased width */}
+                        <th className="px-3 py-2 w-[180px]">Cost (R)</th>
                         <th className="px-3 py-2 w-[120px]">On‑hand</th>
                         <th className="px-3 py-2 w-[150px]">Method</th>
                         <th className="px-3 py-2 w-[120px]">Rev %</th>
@@ -890,6 +1030,21 @@ export default function SetupTab({
 
                           <td className="px-3 py-2">
                             <Input className="h-9" value={p.name || ""} onChange={(e) => updateProduct(p.id, { name: e.target.value })} placeholder="Name" />
+                            {(() => {
+                              const cat = PRODUCT_CATEGORIES.find(c => c.value === p.category);
+                              const moqWarning = cat?.moq && parseInt(p.expectedUnits as any) > 0 && parseInt(p.expectedUnits as any) < 10;
+                              return cat ? (
+                                <div className="flex items-center gap-1 mt-0.5">
+                                  <span className="text-xs text-muted-foreground">{cat.label}</span>
+                                  <span className="text-xs text-blue-600 dark:text-blue-400">· GP {cat.minGP}–{cat.maxGP}%</span>
+                                  {moqWarning && (
+                                    <span className="flex items-center gap-0.5 text-xs text-amber-600">
+                                      <AlertTriangle className="w-3 h-3" /> MOQ: {cat.moq}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : null;
+                            })()}
                           </td>
 
                           <td className="px-3 py-2 text-muted-foreground whitespace-nowrap overflow-hidden text-ellipsis max-w-[150px]">
@@ -1049,7 +1204,7 @@ export default function SetupTab({
                     className="pl-6 h-9"
                     type="number"
                     step="0.01"
-                    value={editing.costPerUnit}
+                    value={editing.costPerUnit ?? 0}
                     onChange={(e) => setEditing({ ...editing, costPerUnit: parseFloat(e.target.value) || 0 })}
                   />
                 </div>
@@ -1091,6 +1246,37 @@ export default function SetupTab({
               <div>
                 <Label>Unit</Label>
                 <Input className="h-9 mt-1" value={editing.unit || ""} onChange={(e) => setEditing({ ...editing, unit: e.target.value || undefined })} />
+              </div>
+              <div className="md:col-span-2">
+                <Label>Product Category</Label>
+                <Select value={(editing as any).category || ""} onValueChange={(v) => setEditing({ ...editing, category: v } as any)}>
+                  <SelectTrigger className="h-9 mt-1"><SelectValue placeholder="Select category" /></SelectTrigger>
+                  <SelectContent>
+                    {PRODUCT_CATEGORIES.map((c) => (
+                      <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {(() => {
+                  const cat = PRODUCT_CATEGORIES.find(c => c.value === (editing as any).category);
+                  return cat ? (
+                    <div className="mt-1 p-2 bg-blue-50 dark:bg-blue-950/30 rounded text-xs flex gap-4">
+                      <span><span className="font-medium">Target GP:</span> {cat.minGP}%–{cat.maxGP}%</span>
+                      {cat.moq && <span><span className="font-medium">MOQ:</span> {cat.moq}</span>}
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+              <div className="md:col-span-2 flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  id="edit-inhouse"
+                  checked={(editing as any).isInHouse ?? false}
+                  onChange={(e) => setEditing({ ...editing, isInHouse: e.target.checked } as any)}
+                  className="h-4 w-4 accent-primary"
+                />
+                <Label htmlFor="edit-inhouse" className="text-sm">In-House Production</Label>
+                <span className="text-xs text-muted-foreground">(vs outsourced supplier)</span>
               </div>
             </div>
 

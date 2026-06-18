@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useToast } from "@/hooks/use-toast";
 import SidebarNavigation from "@/components/pricing/sidebar-navigation";
 import SetupTab from "@/components/pricing/setup-tab";
@@ -26,10 +26,11 @@ import {
 } from "@/types/pricing";
 import { useLocation } from "wouter";
 import TenderManagementTab from "@/components/pricing/TenderManagementTab";
+import QuoteBuilderTab from "@/components/pricing/quote-builder-tab";
 
 export default function PricingCalculator() {
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<PricingTab>("setup");
+  const [activeTab, setActiveTab] = useState<PricingTab>("quote-builder");
   const [activeFinancialSubTab, setActiveFinancialSubTab] = useState<FinancialSubTab>("transactions");
   const [isCalculating, setIsCalculating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -54,18 +55,19 @@ export default function PricingCalculator() {
   const [budgetItems, setBudgetItems] = useState<any[]>([]);
   const [snapshots, setSnapshots] = useState<PricingSnapshot[]>([]);
 
-  // Load saved data from localStorage on initial render
+  // Load saved data — DB is authoritative for overhead/profit, localStorage for everything else
   useEffect(() => {
+    // 1. Load local state first (fast, instant)
     const savedData = localStorage.getItem("pricing-calculator-data");
     if (savedData) {
       try {
         const parsed = JSON.parse(savedData);
         setSetup({
           ...parsed.setup,
-          totalCost: parseFloat(parsed.setup?.totalCost || 0) || 0,
+          totalCost:    parseFloat(parsed.setup?.totalCost    || 0) || 0,
           targetProfit: parseFloat(parsed.setup?.targetProfit || 0) || 0,
-          targetMargin: parseFloat(parsed.setup?.targetMargin || 0) || 0
-        } || setup);
+          targetMargin: parseFloat(parsed.setup?.targetMargin || 0) || 0,
+        });
         setProducts(parsed.products || []);
         setResults(parsed.results || null);
         setScenarios(parsed.scenarios || []);
@@ -75,20 +77,48 @@ export default function PricingCalculator() {
         console.error("Error loading saved data from localStorage:", error);
       }
     }
+    // 2. Then overlay DB overhead values so both screens always agree
+    fetch("/api/quote-config", { headers: { Accept: "application/json" } })
+      .then(r => r.ok ? r.json() : {})
+      .then((cfg: any) => {
+        setSetup(prev => ({
+          ...prev,
+          ...(cfg.monthlyOverhead     ? { totalCost:    Number(cfg.monthlyOverhead)     } : {}),
+          ...(cfg.monthlyProfitTarget ? { targetProfit: Number(cfg.monthlyProfitTarget) } : {}),
+        }));
+      })
+      .catch(() => {});
   }, []);
 
   // Save data to localStorage whenever relevant states change
   useEffect(() => {
-    const dataToSave = {
-      setup,
-      products,
-      results,
-      scenarios,
-      competitorPrices,
-      budgetItems
-    };
+    const dataToSave = { setup, products, results, scenarios, competitorPrices, budgetItems };
     localStorage.setItem("pricing-calculator-data", JSON.stringify(dataToSave));
   }, [setup, products, results, scenarios, competitorPrices, budgetItems]);
+
+  // Sync overhead + profit target to DB so quotations coverage bar stays in sync
+  const overheadSyncRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    // Compute effective overhead (breakdown mode sums expenses; simple mode uses totalCost)
+    const effectiveOverhead = setup.useBreakdown
+      ? setup.expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0)
+      : setup.totalCost || 0;
+    const effectiveProfit = !setup.useMargin ? (setup.targetProfit || 0) : 0;
+    if (effectiveOverhead === 0 && effectiveProfit === 0) return;
+
+    if (overheadSyncRef.current) clearTimeout(overheadSyncRef.current);
+    overheadSyncRef.current = setTimeout(() => {
+      const patch: Record<string, unknown> = {};
+      if (effectiveOverhead > 0) patch.monthlyOverhead     = effectiveOverhead;
+      if (effectiveProfit  > 0) patch.monthlyProfitTarget = effectiveProfit;
+      fetch("/api/quote-config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      }).catch(() => {});
+    }, 1500);
+    return () => { if (overheadSyncRef.current) clearTimeout(overheadSyncRef.current); };
+  }, [setup.totalCost, setup.targetProfit, setup.expenses, setup.useBreakdown, setup.useMargin]);
 
   // Fetch snapshots
   const fetchSnapshots = async () => {
@@ -233,7 +263,7 @@ const handleCreateSnapshot = async (name: string, description?: string) => {
       throw new Error("Nothing to save. Set On‑hand Qty (> 0) for at least one product.");
     }
 
-    // 1) Create snapshot shell
+    // 1) Create snapshot shell AND expenses (passed directly)
     const snapshotPayload = {
       name,
       description,
@@ -242,6 +272,10 @@ const handleCreateSnapshot = async (name: string, description?: string) => {
       targetProfit: (setup.targetProfit || 0).toString(),
       targetMargin: (setup.targetMargin || 0).toString(),
       useBreakdown: !!setup.useBreakdown,
+      expenses: setup.expenses.map(e => ({
+        label: e.label,
+        amount: (e.amount || 0).toString()
+      }))
     };
 
     const snapshotResponse = await fetch("/api/snapshots", {
@@ -287,23 +321,6 @@ const handleCreateSnapshot = async (name: string, description?: string) => {
       }
     }
 
-    // 4) Save expenses (unchanged)
-    for (const expense of setup.expenses) {
-      const expensePayload = {
-        label: expense.label,
-        amount: (expense.amount || 0).toString(),
-      };
-      const er = await fetch(`/api/snapshots/${snapshotId}/expenses`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(expensePayload),
-      });
-      if (!er.ok) {
-        const err = await er.json().catch(() => ({}));
-        console.error(`Failed to create expense for snapshot ${snapshotId}`, err);
-      }
-    }
-
     await fetchSnapshots();
     toast({ title: "Snapshot created", description: `Snapshot "${name}" has been saved with in‑stock items and calculated prices.` });
   } catch (error: any) {
@@ -340,22 +357,44 @@ const handleCreateSnapshot = async (name: string, description?: string) => {
     }
   };
 
+
+
   const handleLoadSnapshot = async (snapshot: PricingSnapshot) => {
     setIsSaving(true);
     try {
-      setSetup({
-        totalCost: parseFloat(snapshot.totalCost as any) || 0,
-        expenses: [],
-        useMargin: snapshot.useMargin,
-        targetProfit: parseFloat(snapshot.targetProfit as any) || 0,
-        targetMargin: parseFloat(snapshot.targetMargin as any) || 0,
-        useBreakdown: snapshot.useBreakdown
-      });
+      // 1. ROBUST MAPPING: Handle potential snake_case from DB vs camelCase
+      const s = snapshot as any; // Cast to any to safely check snake_case properties
+      
+      const loadedTotalCost = parseFloat(s.totalCost ?? s.total_cost ?? 0);
+      const loadedTargetProfit = parseFloat(s.targetProfit ?? s.target_profit ?? 0);
+      const loadedTargetMargin = parseFloat(s.targetMargin ?? s.target_margin ?? 0);
+      // Handle boolean conversion safely
+      const loadedUseMargin = s.useMargin ?? s.use_margin ?? false; 
+      const loadedUseBreakdown = s.useBreakdown ?? s.use_breakdown ?? false;
 
-      const productsResponse = await fetch(`/api/snapshots/${snapshot.id}/products`);
+      // 2. Process expenses
+      const loadedExpenses = (s.expenses || []).map((e: any) => ({
+        id: String(e.id || Date.now() + Math.random()),
+        label: e.label,
+        amount: parseFloat(e.amount as any) || 0
+      }));
+
+      // 3. Update Setup State with CORRECT values
+      const newSetup: PricingSetup = {
+        totalCost: loadedTotalCost,
+        expenses: loadedExpenses,
+        useMargin: loadedUseMargin,
+        targetProfit: loadedTargetProfit,
+        targetMargin: loadedTargetMargin,
+        useBreakdown: loadedUseBreakdown
+      };
+      
+      setSetup(newSetup);
+
+      // 4. Fetch Products
+      const productsResponse = await fetch(`/api/snapshots/${s.id}/products`);
       if (!productsResponse.ok) {
-        const errorData = await productsResponse.json();
-        throw new Error(errorData.message || `Failed to fetch products for snapshot (HTTP ${productsResponse.status})`);
+        throw new Error(`Failed to fetch products (HTTP ${productsResponse.status})`);
       }
       const fetchedProducts: PricingProduct[] = await productsResponse.json();
 
@@ -370,28 +409,22 @@ const handleCreateSnapshot = async (name: string, description?: string) => {
       }));
       setProducts(parsedProducts);
 
-      const recalculatedSetup: PricingSetup = {
-        totalCost: parseFloat(snapshot.totalCost as any) || 0,
-        expenses: [],
-        useMargin: snapshot.useMargin,
-        targetProfit: parseFloat(snapshot.targetProfit as any) || 0,
-        targetMargin: parseFloat(snapshot.targetMargin as any) || 0,
-        useBreakdown: snapshot.useBreakdown
-      };
-
-      const recalculatedResults = calculatePricing(recalculatedSetup, parsedProducts);
+      // 5. Recalculate Results
+      // Now that 'newSetup' has the correct margin/profit targets, 
+      // this calculation will reproduce your original Selling Prices.
+      const recalculatedResults = calculatePricing(newSetup, parsedProducts);
       setResults(recalculatedResults);
 
       toast({
         title: "Snapshot loaded",
-        description: `Snapshot "${snapshot.name}" and its products have been loaded successfully.`
+        description: `Snapshot "${s.name}" loaded .`
       });
       setActiveTab("products");
     } catch (error: any) {
-      console.error("Error loading snapshot and products:", error);
+      console.error("Error loading snapshot:", error);
       toast({
         title: "Snapshot load failed",
-        description: error.message || "There was an error loading the snapshot and its products. Please try again.",
+        description: error.message || "Could not load snapshot data.",
         variant: "destructive"
       });
     } finally {
@@ -515,6 +548,9 @@ const handleCreateSnapshot = async (name: string, description?: string) => {
 
 const renderActiveTab = () => {
   switch (activeTab) {
+    case "quote-builder":
+      return <QuoteBuilderTab setup={setup} />;
+
     case "setup":
       return (
         <SetupTab
@@ -595,7 +631,7 @@ const renderActiveTab = () => {
           }
         />
       );
-     
+      
 
     case "scenarios":
       return (
